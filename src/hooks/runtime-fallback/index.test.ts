@@ -1,0 +1,490 @@
+import { describe, test, expect, mock, beforeEach } from "bun:test"
+import type { ProviderErrorClassification } from "../../shared/provider-error-classifier"
+import type { RetryDecision } from "../../shared/retry-strategy"
+import type { FallbackResult } from "../../shared/runtime-fallback"
+
+// ── Mock shared modules ──────────────────────────────────────────────
+const mockClassifyProviderError = mock(
+  (_error: unknown): ProviderErrorClassification => ({
+    category: "unknown",
+    retryable: false,
+    shouldFallback: false,
+    reason: "test",
+  }),
+)
+
+const mockCalculateRetryDelay = mock(
+  (_attempt: number, _config?: unknown, _retryAfterMs?: number): RetryDecision => ({
+    retryable: true,
+    delay_ms: 1000,
+    attempt: 0,
+    reason: "test",
+  }),
+)
+
+const mockResolveNextFallbackModel = mock(
+  (_input: unknown): FallbackResult => ({
+    kind: "next",
+    model: { providerID: "openai", modelID: "gpt-4o" },
+    attempts: [],
+  }),
+)
+
+mock.module("../../shared/provider-error-classifier", () => ({
+  classifyProviderError: mockClassifyProviderError,
+}))
+
+mock.module("../../shared/retry-strategy", () => ({
+  calculateRetryDelay: mockCalculateRetryDelay,
+  DEFAULT_RETRY_CONFIG: {
+    max_attempts: 3,
+    initial_delay_ms: 1000,
+    backoff_factor: 2,
+    max_delay_ms: 30000,
+    jitter: true,
+    respect_retry_after: true,
+  },
+}))
+
+mock.module("../../shared/runtime-fallback", () => ({
+  resolveNextFallbackModel: mockResolveNextFallbackModel,
+}))
+
+// Import after mocks are set up
+import { createRuntimeFallbackHook } from "./index"
+
+// ── Helpers ──────────────────────────────────────────────────────────
+function createMockCtx() {
+  return {
+    client: {
+      session: {
+        prompt: mock(() => Promise.resolve({})),
+      },
+    },
+    directory: "/test",
+  } as any
+}
+
+function createSessionErrorEvent(
+  sessionID: string,
+  error: unknown,
+): { type: string; properties: Record<string, unknown> } {
+  return {
+    type: "session.error",
+    properties: { sessionID, error },
+  }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────
+describe("runtime-fallback", () => {
+  beforeEach(() => {
+    mockClassifyProviderError.mockClear()
+    mockCalculateRetryDelay.mockClear()
+    mockResolveNextFallbackModel.mockClear()
+  })
+
+  describe("Fallback 触发", () => {
+    // #given 402 quota error
+    // #when handler processes the event
+    // #then should call session.prompt with fallback model
+    test("402/quota error triggers fallback and calls session.prompt", async () => {
+      // Arrange
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        statusCode: 402,
+        providerGuess: "anthropic",
+        reason: "Anthropic billing error",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = createSessionErrorEvent("ses_123", {
+        status: 402,
+        type: "billing_error",
+      })
+
+      // Act
+      const result = await hook.handler({ event })
+
+      // Assert
+      expect(result).toBe(true)
+      expect(mockClassifyProviderError).toHaveBeenCalledWith(event.properties.error)
+      expect(mockResolveNextFallbackModel).toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: { id: "ses_123" },
+          body: expect.objectContaining({
+            model: { providerID: "openai", modelID: "gpt-4o" },
+          }),
+        }),
+      )
+    })
+
+    // #given quota error with exhausted fallback chain
+    // #when handler processes the event
+    // #then should not call session.prompt
+    test("quota error with exhausted fallback does not call session.prompt", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        statusCode: 402,
+        reason: "billing error",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "exhausted",
+        attempts: [],
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 402 })
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("Retry 逻辑", () => {
+    // #given 429 rate_limit error with retries remaining
+    // #when handler processes the event
+    // #then should not fallback (retry instead)
+    test("429 rate_limit with retries remaining does not fallback", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "rate_limit",
+        retryable: true,
+        shouldFallback: false,
+        statusCode: 429,
+        reason: "rate limit exceeded",
+      })
+
+      // First attempt - retries remaining
+      mockCalculateRetryDelay.mockReturnValueOnce({
+        retryable: true,
+        delay_ms: 1000,
+        attempt: 0,
+        reason: "exponential backoff",
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 429 })
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false) // Not handled - will retry
+      expect(mockResolveNextFallbackModel).not.toHaveBeenCalled()
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled()
+    })
+
+    // #given 429 rate_limit error with retries exhausted
+    // #when handler processes the event
+    // #then should trigger fallback
+    test("429 rate_limit with retries exhausted triggers fallback", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "rate_limit",
+        retryable: true,
+        shouldFallback: false,
+        statusCode: 429,
+        reason: "rate limit exceeded",
+      })
+
+      // Exhaust retries: call handler 3 times (max_attempts)
+      mockCalculateRetryDelay
+        .mockReturnValueOnce({ retryable: true, delay_ms: 1000, attempt: 0, reason: "backoff" })
+        .mockReturnValueOnce({ retryable: true, delay_ms: 2000, attempt: 1, reason: "backoff" })
+        .mockReturnValueOnce({ retryable: false, delay_ms: 0, attempt: 2, reason: "max attempts reached" })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "google", modelID: "gemini-3-flash" },
+        attempts: [],
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 429 })
+
+      // First two calls - retries
+      await hook.handler({ event })
+      await hook.handler({ event })
+
+      // Third call - retries exhausted, should fallback
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(mockResolveNextFallbackModel).toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+  })
+
+  describe("Context overflow 不处理", () => {
+    // #given context_overflow error
+    // #when handler processes the event
+    // #then should return false (not handled)
+    test("context_overflow error returns false", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "context_overflow",
+        retryable: false,
+        shouldFallback: false,
+        reason: "Context length exceeded",
+      })
+
+      const event = createSessionErrorEvent("ses_123", {
+        message: "context_length_exceeded",
+      })
+
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockResolveNextFallbackModel).not.toHaveBeenCalled()
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("SessionRecovery 协调", () => {
+    // #given sessionRecovery that can handle the error
+    // #when handler processes the event
+    // #then should return false (defer to sessionRecovery)
+    test("defers to sessionRecovery when isRecoverableError returns true", async () => {
+      const ctx = createMockCtx()
+      const sessionRecovery = {
+        isRecoverableError: mock(() => true),
+      }
+      const hook = createRuntimeFallbackHook(ctx, { sessionRecovery })
+
+      const event = createSessionErrorEvent("ses_123", {
+        message: "tool_use and tool_result mismatch",
+      })
+
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(sessionRecovery.isRecoverableError).toHaveBeenCalledWith(event.properties.error)
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled()
+    })
+
+    // #given sessionRecovery that cannot handle the error
+    // #when handler processes the event with quota error
+    // #then should handle the error (fallback)
+    test("handles error when sessionRecovery cannot recover", async () => {
+      const ctx = createMockCtx()
+      const sessionRecovery = {
+        isRecoverableError: mock(() => false),
+      }
+      const hook = createRuntimeFallbackHook(ctx, { sessionRecovery })
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        statusCode: 402,
+        reason: "billing error",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 402 })
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(mockClassifyProviderError).toHaveBeenCalled()
+    })
+  })
+
+  describe("Error 输入格式", () => {
+    // #given various error input types
+    // #when handler processes each
+    // #then should not throw for any format
+    test("handles string error without throwing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "unknown",
+        retryable: false,
+        shouldFallback: false,
+        reason: "Unknown error",
+      })
+
+      const event = createSessionErrorEvent("ses_123", "simple string error")
+
+      await expect(hook.handler({ event })).resolves.toBe(false)
+    })
+
+    test("handles Error instance without throwing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "unknown",
+        retryable: false,
+        shouldFallback: false,
+        reason: "Unknown error",
+      })
+
+      const event = createSessionErrorEvent("ses_123", new Error("test error"))
+
+      await expect(hook.handler({ event })).resolves.toBe(false)
+    })
+
+    test("handles object error without throwing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "unknown",
+        retryable: false,
+        shouldFallback: false,
+        reason: "Unknown error",
+      })
+
+      const event = createSessionErrorEvent("ses_123", {
+        status: 500,
+        message: "internal server error",
+      })
+
+      await expect(hook.handler({ event })).resolves.toBe(false)
+    })
+
+    test("handles null/undefined error without throwing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      const eventWithNull = createSessionErrorEvent("ses_123", null)
+      const eventWithUndefined = createSessionErrorEvent("ses_123", undefined)
+
+      await expect(hook.handler({ event: eventWithNull })).resolves.toBe(false)
+      await expect(hook.handler({ event: eventWithUndefined })).resolves.toBe(false)
+    })
+
+    test("handles unknown type error without throwing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "unknown",
+        retryable: false,
+        shouldFallback: false,
+        reason: "Unknown error",
+      })
+
+      const event = createSessionErrorEvent("ses_123", 42)
+
+      await expect(hook.handler({ event })).resolves.toBe(false)
+    })
+  })
+
+  describe("不处理的错误类别", () => {
+    // #given auth error
+    // #when handler processes the event
+    // #then should return false
+    test("auth error returns false", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "auth",
+        retryable: false,
+        shouldFallback: false,
+        statusCode: 401,
+        reason: "Invalid API key",
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 401 })
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockResolveNextFallbackModel).not.toHaveBeenCalled()
+    })
+
+    // #given bad_request error
+    // #when handler processes the event
+    // #then should return false
+    test("bad_request error returns false", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "bad_request",
+        retryable: false,
+        shouldFallback: false,
+        statusCode: 400,
+        reason: "Invalid request",
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 400 })
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockResolveNextFallbackModel).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("非 session.error 事件", () => {
+    // #given non-session.error event
+    // #when handler processes the event
+    // #then should return false (not handled)
+    test("ignores non-session.error events", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      const event = { type: "message.updated", properties: {} }
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("缺少必要属性", () => {
+    // #given session.error event without sessionID
+    // #when handler processes the event
+    // #then should return false
+    test("returns false when sessionID is missing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      const event = { type: "session.error", properties: { error: new Error("test") } }
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+
+    // #given session.error event without error
+    // #when handler processes the event
+    // #then should return false
+    test("returns false when error is missing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      const event = { type: "session.error", properties: { sessionID: "ses_123" } }
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+  })
+})

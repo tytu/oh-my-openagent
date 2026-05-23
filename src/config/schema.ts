@@ -82,6 +82,7 @@ export const HookNameSchema = z.enum([
   "auto-slash-command",
   "edit-error-recovery",
   "delegate-task-retry",
+  "runtime-fallback",
   "prometheus-md-only",
   "perf-profiler",
   "start-work",
