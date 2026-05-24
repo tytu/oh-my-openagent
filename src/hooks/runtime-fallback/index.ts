@@ -9,14 +9,18 @@
  */
 
 import type { PluginInput } from "@opencode-ai/plugin"
+import type { RuntimeFallbackConfig } from "../../config/schema"
 import { classifyProviderError } from "../../shared/provider-error-classifier"
 import { calculateRetryDelay, DEFAULT_RETRY_CONFIG } from "../../shared/retry-strategy"
-import { resolveNextFallbackModel } from "../../shared/runtime-fallback"
+import { log } from "../../shared/logger"
+import { resolveNextFallbackModel, type FallbackAttempt, type FallbackModel } from "../../shared/runtime-fallback"
 
 export interface RuntimeFallbackOptions {
+  config?: RuntimeFallbackConfig
   sessionRecovery?: {
     isRecoverableError: (error: unknown) => boolean
   }
+  getConfiguredFallbackModels?: (agent?: string, category?: string) => FallbackModel[] | undefined
 }
 
 interface RetryState {
@@ -25,14 +29,36 @@ interface RetryState {
 }
 
 export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFallbackOptions) {
-  // Session-scoped retry state
   const retryStates = new Map<string, RetryState>()
+  const fallbackAttempts = new Map<string, FallbackAttempt[]>()
+  const config = options?.config ?? {
+    enabled: true,
+    max_attempts: 3,
+    initial_delay_ms: DEFAULT_RETRY_CONFIG.initial_delay_ms,
+    backoff_factor: DEFAULT_RETRY_CONFIG.backoff_factor,
+    max_delay_ms: DEFAULT_RETRY_CONFIG.max_delay_ms,
+    respect_retry_after: DEFAULT_RETRY_CONFIG.respect_retry_after,
+    jitter: DEFAULT_RETRY_CONFIG.jitter,
+  }
 
   const handler = async ({
     event,
   }: {
     event: { type: string; properties?: unknown }
   }): Promise<boolean> => {
+    if (!config.enabled) return false
+
+    if (event.type === "session.deleted") {
+      const props = event.properties as Record<string, unknown> | undefined
+      const info = props?.info as { id?: string } | undefined
+      const sessionID = info?.id ?? props?.sessionID as string | undefined
+      if (sessionID) {
+        retryStates.delete(sessionID)
+        fallbackAttempts.delete(sessionID)
+      }
+      return false
+    }
+
     // Only handle session.error events
     if (event.type !== "session.error") return false
 
@@ -66,7 +92,7 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       const state = retryStates.get(sessionID) ?? { attempt: 0, lastAttemptTime: Date.now() }
       const decision = calculateRetryDelay(
         state.attempt,
-        DEFAULT_RETRY_CONFIG,
+        config,
         classification.retryAfterMs,
       )
 
@@ -90,16 +116,17 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       return false
     }
 
-    // 7. Fallback: get current model from session messages
-    // Get current model from session messages
     let currentModel = { providerID: "", modelID: "" }
+    let agent = props?.agent as string | undefined
+    const category = props?.category as string | undefined
     try {
-      const messagesResp = await ctx.client.session.messages({ path: { id: sessionID } })
-      const messages = (messagesResp.data ?? []) as Array<{
-        info?: { model?: { providerID: string; modelID: string }; modelID?: string; providerID?: string }
+      const messagesResp = await ctx.client.session.messages?.({ path: { id: sessionID } })
+      const messages = (messagesResp?.data ?? []) as Array<{
+        info?: { agent?: string; model?: { providerID: string; modelID: string }; modelID?: string; providerID?: string }
       }>
       for (let i = messages.length - 1; i >= 0; i--) {
         const info = messages[i].info
+        if (!agent && info?.agent) agent = info.agent
         const msgModel = info?.model
         if (msgModel?.providerID && msgModel?.modelID) {
           currentModel = { providerID: msgModel.providerID, modelID: msgModel.modelID }
@@ -110,19 +137,24 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
           break
         }
       }
-    } catch {
-      // If we can't get messages, use empty model (fallback chain will still work)
+    } catch (messageReadError) {
+      log("[runtime-fallback] failed to read session messages", { sessionID, error: String(messageReadError) })
     }
 
-    // 7. Resolve next fallback model
+    agent ??= "sisyphus"
+    const attempts = fallbackAttempts.get(sessionID) ?? []
     const fallbackResult = resolveNextFallbackModel({
+      agent,
+      category,
       currentModel,
-      attempts: [],
+      attempts,
+      configuredFallbackModels: options?.getConfiguredFallbackModels?.(agent, category),
+      maxAttempts: config.max_attempts,
       lastErrorClassification: classification,
     })
 
-    if (fallbackResult.kind === "exhausted") {
-      return false // No fallback available
+    if (fallbackResult.kind !== "next") {
+      return false
     }
 
     // 8. Inject fallback via session.prompt
@@ -135,8 +167,13 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
         },
         query: { directory: ctx.directory },
       })
+      fallbackAttempts.delete(sessionID)
       return true
-    } catch {
+    } catch (fallbackError) {
+      fallbackAttempts.set(sessionID, [
+        ...attempts,
+        { model: fallbackResult.model, error: classifyProviderError(fallbackError) },
+      ])
       return false
     }
   }

@@ -83,6 +83,55 @@ describe("runtime-fallback", () => {
     mockResolveNextFallbackModel.mockClear()
   })
 
+  describe("Configuration", () => {
+    test("enabled=false returns false without fallback", async () => {
+      // #given
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, { config: { enabled: false, max_attempts: 3, initial_delay_ms: 0, backoff_factor: 2, max_delay_ms: 0, respect_retry_after: true, jitter: false } })
+      const event = createSessionErrorEvent("ses_123", { status: 402 })
+
+      // #when
+      const result = await hook.handler({ event })
+
+      // #then
+      expect(result).toBe(false)
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+      expect(mockResolveNextFallbackModel).not.toHaveBeenCalled()
+    })
+
+    test("passes configured fallback models and maxAttempts to resolver", async () => {
+      // #given
+      const ctx = createMockCtx()
+      const configuredFallbackModels = [{ providerID: "volcengine", modelID: "deepseek-v4-flash" }]
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: { enabled: true, max_attempts: 1, initial_delay_ms: 0, backoff_factor: 2, max_delay_ms: 0, respect_retry_after: true, jitter: false },
+        getConfiguredFallbackModels: () => configuredFallbackModels,
+      })
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "quota",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: configuredFallbackModels[0],
+        attempts: [],
+      })
+      const event = createSessionErrorEvent("ses_123", { status: 402 })
+
+      // #when
+      await hook.handler({ event })
+
+      // #then
+      expect(mockResolveNextFallbackModel).toHaveBeenCalledWith(expect.objectContaining({
+        agent: "sisyphus",
+        configuredFallbackModels,
+        maxAttempts: 1,
+      }))
+    })
+  })
+
   describe("Fallback 触发", () => {
     // #given 402 quota error
     // #when handler processes the event
@@ -147,6 +196,7 @@ describe("runtime-fallback", () => {
       mockResolveNextFallbackModel.mockReturnValueOnce({
         kind: "exhausted",
         attempts: [],
+        reason: "No fallback candidates available",
       })
 
       const event = createSessionErrorEvent("ses_123", { status: 402 })
