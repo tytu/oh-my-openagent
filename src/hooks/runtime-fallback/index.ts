@@ -60,21 +60,29 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       return false
     }
 
-    // Only handle session.error and message.updated events
-    if (event.type !== "session.error" && event.type !== "message.updated") return false
+    // handle session.error, message.updated, message.part.updated (RetryPart)
+    if (event.type !== "session.error" && event.type !== "message.updated" && event.type !== "message.part.updated") return false
 
     const props = event.properties as Record<string, unknown> | undefined
     let sessionID: string | undefined
     let error: unknown
+    let retryAttempt: number | undefined
 
     if (event.type === "session.error") {
       sessionID = props?.sessionID as string | undefined
       error = props?.error
-    } else {
-      // message.updated: extract error from assistant message
+    } else if (event.type === "message.updated") {
       const info = props?.info as Record<string, unknown> | undefined
       sessionID = info?.sessionID as string | undefined
       error = info?.error
+    } else {
+      // message.part.updated: check for RetryPart
+      const part = props?.part as Record<string, unknown> | undefined
+      if (part?.type !== "retry") return false
+      const retryPart = part as { type: "retry"; attempt: number; error: unknown; sessionID?: string }
+      sessionID = retryPart.sessionID ?? props?.sessionID as string | undefined
+      error = retryPart.error
+      retryAttempt = retryPart.attempt
     }
 
     // Guard: require sessionID and error
@@ -97,6 +105,7 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       messageSnippet: classification.reason?.substring(0, 100),
       sessionID,
       eventType: event.type,
+      retryAttempt,
     })
 
     // 3. context_overflow → not handled (let context-window-recovery handle it)
@@ -111,26 +120,37 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
 
     // 5. rate_limit → retry or fallback
     if (classification.category === "rate_limit") {
-      const state = retryStates.get(sessionID) ?? { attempt: 0, lastAttemptTime: Date.now() }
-      const decision = calculateRetryDelay(
-        state.attempt,
-        config,
-        classification.retryAfterMs,
-      )
+      // If this is a RetryPart, use OpenCode's attempt count directly
+      const effectiveAttempt = retryAttempt ?? retryStates.get(sessionID)?.attempt ?? 0
 
-      if (decision.retryable && state.attempt < config.max_retries_before_fallback) {
-        // Update retry state and wait
-        retryStates.set(sessionID, {
-          attempt: state.attempt + 1,
-          lastAttemptTime: Date.now(),
-        })
-        // Wait for the retry delay
-        await new Promise((resolve) => setTimeout(resolve, decision.delay_ms))
-        return false // Not handled yet - will retry
+      if (retryAttempt !== undefined) {
+        // RetryPart: OpenCode is already retrying, check threshold
+        if (effectiveAttempt >= config.max_retries_before_fallback) {
+          retryStates.delete(sessionID)
+          // fall through to fallback
+        } else {
+          return false // let OpenCode continue retrying
+        }
+      } else {
+        // session.error / message.updated: use internal retry counter
+        const state = retryStates.get(sessionID) ?? { attempt: 0, lastAttemptTime: Date.now() }
+        const decision = calculateRetryDelay(
+          state.attempt,
+          config,
+          classification.retryAfterMs,
+        )
+
+        if (decision.retryable && state.attempt < config.max_retries_before_fallback) {
+          retryStates.set(sessionID, {
+            attempt: state.attempt + 1,
+            lastAttemptTime: Date.now(),
+          })
+          await new Promise((resolve) => setTimeout(resolve, decision.delay_ms))
+          return false
+        }
+
+        retryStates.delete(sessionID)
       }
-
-      // Retries exhausted → fall through to fallback
-      retryStates.delete(sessionID)
     }
 
     // 6. Only handle quota and rate_limit (with exhausted retries)
