@@ -636,6 +636,159 @@ describe("classifyProviderError", () => {
     })
   })
 
+  describe("OpenCode SDK ApiError", () => {
+    test("data.message weekly usage limit reached → quota fallbackable", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          message: "weekly usage limit reached. It will reset in 9 hours 24 minutes. To continue using this model now, enable usage from your available balance",
+          statusCode: 429,
+          isRetryable: false,
+          responseHeaders: {},
+          responseBody: "",
+          metadata: {},
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("data.message reason does not stringify payload as [object Object]", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          message: "weekly usage limit reached. It will reset in 9 hours 24 minutes. To continue using this model now, enable usage from your available balance",
+          statusCode: 429,
+          isRetryable: false,
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.reason).not.toContain("[object Object]")
+    })
+
+    test("data.statusCode is extracted into result.statusCode", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          message: "weekly usage limit reached. It will reset in 9 hours 24 minutes. To continue using this model now, enable usage from your available balance",
+          statusCode: 429,
+          isRetryable: false,
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.statusCode).toBe(429)
+    })
+
+    test("data.responseHeaders Retry-After is parsed for rate limits", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          message: "Rate limit exceeded",
+          statusCode: 429,
+          isRetryable: true,
+          responseHeaders: {
+            "retry-after": "30",
+          },
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryAfterMs).toBe(30000)
+    })
+
+    test("data.responseBody JSON error message is used when data.message is missing", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          statusCode: 429,
+          isRetryable: false,
+          responseBody: JSON.stringify({
+            error: {
+              message: "weekly usage limit reached",
+            },
+          }),
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+    })
+
+    test("invalid data.responseBody JSON does not throw and falls back safely", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          statusCode: 429,
+          isRetryable: false,
+          responseBody: "{not json",
+        },
+      }
+
+      // #when
+      const classify = () => classifyProviderError(error)
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(classify).not.toThrow()
+      expect(["unknown", "quota", "rate_limit"]).toContain(result.category)
+    })
+
+    test("legacy object message weekly usage limit reached remains quota", () => {
+      // #given
+      const error = {
+        message: "weekly usage limit reached",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+    })
+
+    test("legacy nested error message weekly usage limit reached remains quota", () => {
+      // #given
+      const error = {
+        error: {
+          message: "weekly usage limit reached",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+    })
+  })
+
   describe("Usage limit quota messages", () => {
     test("weekly usage limit reached → quota", () => {
       // #given
@@ -779,6 +932,199 @@ describe("classifyProviderError", () => {
 
       // #then
       expect(result.category).not.toBe("quota")
+    })
+  })
+
+  describe("OpenCode SDK ApiError", () => {
+    test("ApiError.data.message with weekly usage limit → quota", () => {
+      // #given - OpenCode SDK ApiError v1/v2 形态
+      const error = {
+        name: "APIError",
+        data: {
+          message: "weekly usage limit reached. It will reset in 9 hours 24 minutes. To continue using this model now, enable usage from your available balance",
+          statusCode: 429,
+          isRetryable: false,
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+      expect(result.statusCode).toBe(429)
+    })
+
+    test("ApiError reason does not contain [object Object]", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          message: "weekly usage limit reached. It will reset in 9 hours 24 minutes.",
+          statusCode: 429,
+          isRetryable: false,
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.reason).not.toContain("[object Object]")
+      expect(result.reason).toContain("weekly usage limit")
+    })
+
+    test("ApiError.data.statusCode extracted correctly", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          message: "quota exceeded",
+          statusCode: 429,
+          isRetryable: false,
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.statusCode).toBe(429)
+    })
+
+    test("ApiError.data.responseHeaders used for retryAfterMs", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          message: "Rate limit exceeded",
+          statusCode: 429,
+          isRetryable: true,
+          responseHeaders: {
+            "retry-after": "30",
+          },
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryAfterMs).toBe(30000)
+    })
+
+    test("ApiError.data.responseBody JSON fallback extracts message", () => {
+      // #given - data.message 缺失，从 responseBody 提取
+      const error = {
+        name: "APIError",
+        data: {
+          statusCode: 429,
+          isRetryable: false,
+          responseBody: JSON.stringify({
+            error: {
+              message: "weekly usage limit reached. It will reset in 9 hours.",
+            },
+          }),
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+    })
+
+    test("ApiError.data.responseBody with top-level message", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          statusCode: 429,
+          isRetryable: false,
+          responseBody: JSON.stringify({
+            message: "usage limit reached",
+          }),
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+    })
+
+    test("ApiError.data.responseBody invalid JSON does not throw", () => {
+      // #given
+      const error = {
+        name: "APIError",
+        data: {
+          statusCode: 500,
+          isRetryable: false,
+          responseBody: "not valid json {{{",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then - 不抛异常，安全降级
+      expect(result.category).toBe("unknown")
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("ApiError v2 with metadata field does not break extraction", () => {
+      // #given - v2 新增 metadata 字段
+      const error = {
+        name: "APIError",
+        data: {
+          message: "weekly usage limit reached",
+          statusCode: 429,
+          isRetryable: false,
+          metadata: {
+            requestId: "abc123",
+          },
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.statusCode).toBe(429)
+    })
+
+    test("existing { message } object still works", () => {
+      // #given - 旧形态回归
+      const error = {
+        message: "weekly usage limit reached",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+    })
+
+    test("existing { error: { message } } object still works", () => {
+      // #given - 旧形态回归
+      const error = {
+        error: {
+          message: "weekly usage limit reached",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
     })
   })
 })
