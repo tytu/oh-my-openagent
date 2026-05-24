@@ -94,6 +94,27 @@ export const BuiltinCommandNameSchema = z.enum([
   "start-work",
 ])
 
+const ProviderModelStringSchema = z.string().refine((value) => {
+  const separatorIndex = value.indexOf("/")
+  return separatorIndex > 0 && separatorIndex < value.length - 1
+}, "Expected provider/model format")
+
+const NonEmptyStringSchema = z.string().min(1)
+
+export const FallbackModelEntrySchema = z.union([
+  z.object({
+    model: ProviderModelStringSchema,
+    variant: z.string().optional(),
+  }).strict(),
+  z.object({
+    providerID: NonEmptyStringSchema,
+    modelID: NonEmptyStringSchema,
+    variant: z.string().optional(),
+  }).strict(),
+])
+
+const FallbackModelsSchema = z.array(FallbackModelEntrySchema)
+
 export const AgentOverrideConfigSchema = z.object({
   /** @deprecated Use `category` instead. Model is inherited from category defaults. */
   model: z.string().optional(),
@@ -115,6 +136,7 @@ export const AgentOverrideConfigSchema = z.object({
     .regex(/^#[0-9A-Fa-f]{6}$/)
     .optional(),
   permission: AgentPermissionSchema.optional(),
+  fallback_models: FallbackModelsSchema.optional(),
 })
 
 export const AgentOverridesSchema = z.object({
@@ -155,6 +177,7 @@ export const CategoryConfigSchema = z.object({
   description: z.string().optional(),
   model: z.string().optional(),
   variant: z.string().optional(),
+  fallback_models: FallbackModelsSchema.optional(),
   temperature: z.number().min(0).max(2).optional(),
   top_p: z.number().min(0).max(1).optional(),
   maxTokens: z.number().optional(),
@@ -371,5 +394,6 @@ export type CategoriesConfig = z.infer<typeof CategoriesConfigSchema>
 export type BuiltinCategoryName = z.infer<typeof BuiltinCategoryNameSchema>
 export type GitMasterConfig = z.infer<typeof GitMasterConfigSchema>
 export type RuntimeFallbackConfig = z.infer<typeof RuntimeFallbackConfigSchema>
+export type FallbackModelEntry = z.infer<typeof FallbackModelEntrySchema>
 
 export { AnyMcpNameSchema, type AnyMcpName, McpNameSchema, type McpName } from "../mcp/types"

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { AgentOverrideConfigSchema, BuiltinCategoryNameSchema, CategoryConfigSchema, OhMyOpenCodeConfigSchema, RuntimeFallbackConfigSchema } from "./schema"
+import { AgentOverrideConfigSchema, BuiltinCategoryNameSchema, CategoryConfigSchema, FallbackModelEntrySchema, OhMyOpenCodeConfigSchema, RuntimeFallbackConfigSchema } from "./schema"
 
 describe("disabled_mcps schema", () => {
   test("should accept built-in MCP names", () => {
@@ -506,6 +506,89 @@ describe("Sisyphus-Junior agent override", () => {
       expect(result.data.agents?.metis?.category).toBe("ultrabrain")
       expect(result.data.agents?.momus?.category).toBe("quick")
     }
+  })
+})
+
+describe("fallback_models schema", () => {
+  test("agent and category fallback_models preserve valid string and object entries", () => {
+    // #given
+    const config = {
+      agents: {
+        sisyphus: {
+          fallback_models: [
+            { model: "volcengine/deepseek-v4-flash" },
+            { providerID: "openai", modelID: "gpt-5.2", variant: "high" },
+          ],
+        },
+      },
+      categories: {
+        quick: {
+          fallback_models: [
+            { model: "anthropic/claude-haiku-4-5", variant: "low" },
+            { providerID: "google", modelID: "gemini-3-flash" },
+          ],
+        },
+      },
+    }
+
+    // #when
+    const result = OhMyOpenCodeConfigSchema.safeParse(config)
+
+    // #then
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.agents?.sisyphus?.fallback_models).toEqual(config.agents.sisyphus.fallback_models)
+      expect(result.data.categories?.quick?.fallback_models).toEqual(config.categories.quick.fallback_models)
+    }
+  })
+
+  test("fallback model string entries must use non-empty provider/model format", () => {
+    // #given
+    const invalidEntries = [
+      { model: "claude-opus-4-5" },
+      { model: "/claude-opus-4-5" },
+      { model: "anthropic/" },
+      { model: "" },
+    ]
+
+    for (const entry of invalidEntries) {
+      // #when
+      const result = FallbackModelEntrySchema.safeParse(entry)
+
+      // #then
+      expect(result.success).toBe(false)
+    }
+  })
+
+  test("fallback object entries require non-empty providerID and modelID", () => {
+    // #given
+    const invalidEntries = [
+      { providerID: "", modelID: "claude-opus-4-5" },
+      { providerID: "anthropic", modelID: "" },
+    ]
+
+    for (const entry of invalidEntries) {
+      // #when
+      const result = FallbackModelEntrySchema.safeParse(entry)
+
+      // #then
+      expect(result.success).toBe(false)
+    }
+  })
+
+  test("fallback model entries reject mixed string and object formats", () => {
+    // #given
+    const entry = {
+      model: "anthropic/claude-opus-4-5",
+      providerID: "anthropic",
+      modelID: "claude-opus-4-5",
+    }
+
+    // #when
+    const result = FallbackModelEntrySchema.safeParse(entry)
+
+    // #then
+    expect(result.success).toBe(false)
   })
 })
 
