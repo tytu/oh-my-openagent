@@ -31,6 +31,7 @@ interface RetryState {
 export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFallbackOptions) {
   const retryStates = new Map<string, RetryState>()
   const fallbackAttempts = new Map<string, FallbackAttempt[]>()
+  const interruptingSessions = new Map<string, boolean>()
   const config = options?.config ?? {
     enabled: true,
     max_attempts: 3,
@@ -56,6 +57,7 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       if (sessionID) {
         retryStates.delete(sessionID)
         fallbackAttempts.delete(sessionID)
+        interruptingSessions.delete(sessionID)
       }
       return false
     }
@@ -199,6 +201,24 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       return false
     }
 
+    // For RetryPart events: abort the ongoing retry loop first
+    const isRetryPartEvent = event.type === "message.part.updated" && retryAttempt !== undefined
+    if (isRetryPartEvent) {
+      if (interruptingSessions.get(sessionID)) {
+        return false
+      }
+      interruptingSessions.set(sessionID, true)
+      try {
+        await ctx.client.session.abort({ path: { id: sessionID } })
+        log("[runtime-fallback] aborted retry loop", { sessionID, retryAttempt })
+      } catch (abortErr) {
+        log("[runtime-fallback] abort failed, falling through to direct prompt", {
+          sessionID,
+          error: String(abortErr),
+        })
+      }
+    }
+
     // 8. Inject fallback via session.prompt
     try {
       await ctx.client.session.prompt({
@@ -217,6 +237,10 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
         { model: fallbackResult.model, error: classifyProviderError(fallbackError) },
       ])
       return false
+    } finally {
+      if (isRetryPartEvent) {
+        interruptingSessions.delete(sessionID)
+      }
     }
   }
 

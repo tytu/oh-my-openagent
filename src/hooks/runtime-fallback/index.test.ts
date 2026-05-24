@@ -59,6 +59,8 @@ function createMockCtx() {
     client: {
       session: {
         prompt: mock(() => Promise.resolve({})),
+        abort: mock(() => Promise.resolve(true)),
+        messages: mock(() => Promise.resolve({ data: [] })),
       },
     },
     directory: "/test",
@@ -72,6 +74,24 @@ function createSessionErrorEvent(
   return {
     type: "session.error",
     properties: { sessionID, error },
+  }
+}
+
+function createRetryPartEvent(
+  sessionID: string,
+  error: unknown,
+  attempt: number,
+): { type: string; properties: Record<string, unknown> } {
+  return {
+    type: "message.part.updated",
+    properties: {
+      part: {
+        type: "retry",
+        attempt,
+        error,
+        sessionID,
+      },
+    },
   }
 }
 
@@ -631,10 +651,10 @@ describe("runtime-fallback", () => {
   })
 
   describe("非 session.error 事件", () => {
-    // #given non-session.error event
+    // #given message.updated event without info.error
     // #when handler processes the event
-    // #then should return false (not handled)
-    test("ignores non-session.error events", async () => {
+    // #then should return false (guard clause catches missing sessionID/error)
+    test("message.updated with missing info.error returns false", async () => {
       const ctx = createMockCtx()
       const hook = createRuntimeFallbackHook(ctx)
 
@@ -643,6 +663,259 @@ describe("runtime-fallback", () => {
 
       expect(result).toBe(false)
       expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+
+    // #given completely unknown event type (e.g. "custom.event")
+    // #when handler processes the event
+    // #then should return false without calling classifier
+    test("unknown event type returns false without calling classifier", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      const event = { type: "custom.event", properties: {} }
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("RetryPart 事件处理", () => {
+    // #given RetryPart with quota error and attempt >= max_retries_before_fallback
+    // #when handler processes the event
+    // #then should abort session and call session.prompt with fallback model
+    test("RetryPart quota error triggers abort and fallback when threshold met", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 3,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "You have exceeded the 5-hour usage quota",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = createRetryPartEvent("ses_123", { message: "quota exceeded" }, 2)
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(ctx.client.session.abort).toHaveBeenCalledWith({ path: { id: "ses_123" } })
+      expect(ctx.client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: { id: "ses_123" },
+          body: expect.objectContaining({
+            model: { providerID: "openai", modelID: "gpt-4o" },
+          }),
+        }),
+      )
+    })
+
+    // #given RetryPart with quota error
+    // #when handler processes the event
+    // #then should abort and fallback immediately (quota = immediate fallback, no threshold check)
+    test("RetryPart quota error triggers abort and fallback immediately", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 3,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "You have exceeded the 5-hour usage quota",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = createRetryPartEvent("ses_123", { message: "quota exceeded" }, 0)
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(ctx.client.session.abort).toHaveBeenCalledWith({ path: { id: "ses_123" } })
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+
+    // #given RetryPart with rate_limit error and attempt >= max_retries_before_fallback
+    // #when handler processes the event
+    // #then should abort and fallback
+    test("RetryPart rate_limit triggers fallback after threshold exceeded", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 5,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "rate_limit",
+        retryable: true,
+        shouldFallback: false,
+        statusCode: 429,
+        reason: "rate limit exceeded",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "google", modelID: "gemini-3-flash" },
+        attempts: [],
+      })
+
+      const event = createRetryPartEvent("ses_123", { status: 429 }, 2)
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(ctx.client.session.abort).toHaveBeenCalledWith({ path: { id: "ses_123" } })
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+
+    // #given message.part.updated with non-retry part type
+    // #when handler processes the event
+    // #then should return false (not a RetryPart)
+    test("message.part.updated with non-retry part type is ignored", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      const event = {
+        type: "message.part.updated",
+        properties: {
+          part: { type: "text", text: "hello" },
+        },
+      }
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(false)
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+      expect(ctx.client.session.abort).not.toHaveBeenCalled()
+    })
+
+    // #given RetryPart triggers fallback but abort fails
+    // #when handler processes the event
+    // #then should fall through to direct prompt anyway
+    test("RetryPart falls through to direct prompt when abort fails", async () => {
+      const ctx = createMockCtx()
+      ctx.client.session.abort = mock(() => Promise.reject(new Error("abort failed")))
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 3,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "You have exceeded the 5-hour usage quota",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = createRetryPartEvent("ses_123", { message: "quota exceeded" }, 2)
+      const result = await hook.handler({ event })
+
+      // Abort failed, but prompt should still be attempted
+      expect(ctx.client.session.abort).toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: { id: "ses_123" },
+          body: expect.objectContaining({
+            model: { providerID: "openai", modelID: "gpt-4o" },
+          }),
+        }),
+      )
+    })
+
+    // #given RetryPart with re-entrant call for same session
+    // #when handler processes two concurrent RetryParts for same session
+    // #then second call should return false (re-entry guard)
+    test("RetryPart re-entrant call for same session returns false", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 3,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "You have exceeded the 5-hour usage quota",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      let resolvePrompt: (value: unknown) => void
+      ctx.client.session.prompt = mock(() => new Promise((resolve) => { resolvePrompt = resolve }))
+
+      const event = createRetryPartEvent("ses_123", { message: "quota exceeded" }, 2)
+
+      const firstCallPromise = hook.handler({ event })
+
+      const secondResult = await hook.handler({ event })
+      expect(secondResult).toBe(false)
+
+      resolvePrompt!({})
+      await firstCallPromise
     })
   })
 
