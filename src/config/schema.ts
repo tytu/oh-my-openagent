@@ -343,6 +343,7 @@ export const GitMasterConfigSchema = z.object({
 export const RuntimeFallbackConfigSchema = z.object({
   enabled: z.boolean().default(true),
   max_attempts: z.number().min(0).default(3),
+  max_retries_before_fallback: z.number().min(0).default(2),
   initial_delay_ms: z.number().min(0).default(2000),
   backoff_factor: z.number().min(1).default(2),
   max_delay_ms: z.number().min(0).default(30000),

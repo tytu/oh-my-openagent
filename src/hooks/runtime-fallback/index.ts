@@ -34,6 +34,7 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
   const config = options?.config ?? {
     enabled: true,
     max_attempts: 3,
+    max_retries_before_fallback: 2,
     initial_delay_ms: DEFAULT_RETRY_CONFIG.initial_delay_ms,
     backoff_factor: DEFAULT_RETRY_CONFIG.backoff_factor,
     max_delay_ms: DEFAULT_RETRY_CONFIG.max_delay_ms,
@@ -96,7 +97,7 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
         classification.retryAfterMs,
       )
 
-      if (decision.retryable) {
+      if (decision.retryable && state.attempt < config.max_retries_before_fallback) {
         // Update retry state and wait
         retryStates.set(sessionID, {
           attempt: state.attempt + 1,

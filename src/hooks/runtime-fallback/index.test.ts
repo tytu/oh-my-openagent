@@ -87,7 +87,7 @@ describe("runtime-fallback", () => {
     test("enabled=false returns false without fallback", async () => {
       // #given
       const ctx = createMockCtx()
-      const hook = createRuntimeFallbackHook(ctx, { config: { enabled: false, max_attempts: 3, initial_delay_ms: 0, backoff_factor: 2, max_delay_ms: 0, respect_retry_after: true, jitter: false } })
+      const hook = createRuntimeFallbackHook(ctx, { config: { enabled: false, max_attempts: 3, max_retries_before_fallback: 2, initial_delay_ms: 0, backoff_factor: 2, max_delay_ms: 0, respect_retry_after: true, jitter: false } })
       const event = createSessionErrorEvent("ses_123", { status: 402 })
 
       // #when
@@ -104,7 +104,7 @@ describe("runtime-fallback", () => {
       const ctx = createMockCtx()
       const configuredFallbackModels = [{ providerID: "volcengine", modelID: "deepseek-v4-flash" }]
       const hook = createRuntimeFallbackHook(ctx, {
-        config: { enabled: true, max_attempts: 1, initial_delay_ms: 0, backoff_factor: 2, max_delay_ms: 0, respect_retry_after: true, jitter: false },
+        config: { enabled: true, max_attempts: 1, max_retries_before_fallback: 2, initial_delay_ms: 0, backoff_factor: 2, max_delay_ms: 0, respect_retry_after: true, jitter: false },
         getConfiguredFallbackModels: () => configuredFallbackModels,
       })
       mockClassifyProviderError.mockReturnValueOnce({
@@ -278,6 +278,144 @@ describe("runtime-fallback", () => {
       expect(result).toBe(true)
       expect(mockResolveNextFallbackModel).toHaveBeenCalled()
       expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+  })
+
+  describe("max_retries_before_fallback", () => {
+    // #given rate_limit error with max_retries_before_fallback=2
+    // #when 3rd attempt arrives
+    // #then should skip retry and fallback directly
+    test("max_retries_before_fallback=2 triggers fallback after 2 retries", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 5,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "rate_limit",
+        retryable: true,
+        shouldFallback: false,
+        statusCode: 429,
+        reason: "rate limit exceeded",
+      })
+
+      mockCalculateRetryDelay.mockReturnValue({
+        retryable: true,
+        delay_ms: 0,
+        attempt: 0,
+        reason: "backoff",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "google", modelID: "gemini-3-flash" },
+        attempts: [],
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 429 })
+
+      // First two calls - retries (attempt 0 and 1 < max_retries_before_fallback=2)
+      await hook.handler({ event })
+      await hook.handler({ event })
+
+      // Third call - attempt=2, should skip retry and fallback
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(mockResolveNextFallbackModel).toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+
+    // #given rate_limit error with max_retries_before_fallback=0
+    // #when first attempt arrives
+    // #then should fallback immediately without retry
+    test("max_retries_before_fallback=0 triggers fallback immediately", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 3,
+          max_retries_before_fallback: 0,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "rate_limit",
+        retryable: true,
+        shouldFallback: false,
+        statusCode: 429,
+        reason: "rate limit exceeded",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "google", modelID: "gemini-3-flash" },
+        attempts: [],
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 429 })
+
+      // First call - attempt=0, should skip retry and fallback immediately
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(mockResolveNextFallbackModel).toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+
+    // #given rate_limit error without max_retries_before_fallback config
+    // #when attempts arrive
+    // #then should use default value 2
+    test("max_retries_before_fallback defaults to 2", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "rate_limit",
+        retryable: true,
+        shouldFallback: false,
+        statusCode: 429,
+        reason: "rate limit exceeded",
+      })
+
+      mockCalculateRetryDelay.mockReturnValue({
+        retryable: true,
+        delay_ms: 0,
+        attempt: 0,
+        reason: "backoff",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "google", modelID: "gemini-3-flash" },
+        attempts: [],
+      })
+
+      const event = createSessionErrorEvent("ses_123", { status: 429 })
+
+      // First two calls - retries (attempt 0 and 1 < default 2)
+      await hook.handler({ event })
+      await hook.handler({ event })
+
+      // Third call - attempt=2, should fallback
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(mockResolveNextFallbackModel).toHaveBeenCalled()
     })
   })
 
