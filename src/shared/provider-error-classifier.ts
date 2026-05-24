@@ -408,8 +408,17 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     }
   }
 
-  // xAI/Grok generic 429
+  // xAI/Grok generic 429 — quota 消息优先
   if (statusCode === 429) {
+    if (isGenericQuotaMessage(message)) {
+      return {
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        statusCode,
+        reason: `Quota exceeded: ${message.substring(0, 100)}`,
+      }
+    }
     return {
       category: "rate_limit",
       retryable: true,

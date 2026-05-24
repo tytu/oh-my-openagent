@@ -356,7 +356,7 @@ describe("classifyProviderError", () => {
       expect(result.shouldFallback).toBe(true)
     })
 
-    test("object with status 429 and '5-hour usage quota exceeded' → rate_limit (429 wins over message)", () => {
+    test("object with status 429 and '5-hour usage quota exceeded' → quota (message wins over 429)", () => {
       // #given
       const error = {
         status: 429,
@@ -367,9 +367,9 @@ describe("classifyProviderError", () => {
       const result = classifyProviderError(error)
 
       // #then
-      expect(result.category).toBe("rate_limit")
-      expect(result.retryable).toBe(true)
-      expect(result.shouldFallback).toBe(false)
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
     })
 
     test("non-quota message 'rate limit exceeded, retry' → not quota", () => {
