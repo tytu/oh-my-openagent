@@ -78,6 +78,16 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
     // 2. Classify the error
     const classification = classifyProviderError(error)
 
+    // DEBUG: 临时诊断日志，确认错误分类
+    log("[runtime-fallback] DEBUG error classified", {
+      category: classification.category,
+      shouldFallback: classification.shouldFallback,
+      errorType: typeof error,
+      errorKeys: error && typeof error === "object" ? Object.keys(error as object) : [],
+      messageSnippet: classification.reason?.substring(0, 100),
+      sessionID,
+    })
+
     // 3. context_overflow → not handled (let context-window-recovery handle it)
     if (classification.category === "context_overflow") {
       return false
