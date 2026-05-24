@@ -59,17 +59,42 @@ function extractErrorInfo(error: unknown): {
   if (typeof error === "object" && error !== null) {
     const obj = error as any
     const inner = obj.error ?? {}
+    const data = obj.data ?? {}
+
+    // Message 优先级：inner.message > obj.message > data.message > responseBody 兜底
+    let message = inner.message ?? obj.message ?? data.message
+    if (!message && typeof data.responseBody === "string") {
+      message = extractMessageFromResponseBody(data.responseBody)
+    }
+    message = message ?? String(error)
+
     return {
-      statusCode: obj.status ?? obj.statusCode ?? inner.status,
+      statusCode: obj.status ?? obj.statusCode ?? data.statusCode ?? inner.status,
       code: inner.code ?? obj.code,
       type: inner.type ?? obj.type,
-      message: inner.message ?? obj.message ?? String(error),
+      message,
       status: inner.status ?? obj.status,
-      headers: obj.headers,
+      headers: obj.headers ?? data.responseHeaders,
     }
   }
 
   return { message: String(error) }
+}
+
+/**
+ * 安全从 responseBody 中提取 message（JSON parse 失败返回 undefined）
+ */
+function extractMessageFromResponseBody(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body)
+    if (typeof parsed === "object" && parsed !== null) {
+      // 优先 error.message，其次 message
+      return parsed.error?.message ?? parsed.message
+    }
+  } catch {
+    // JSON parse 失败，忽略
+  }
+  return undefined
 }
 
 /**
