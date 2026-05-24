@@ -60,12 +60,22 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       return false
     }
 
-    // Only handle session.error events
-    if (event.type !== "session.error") return false
+    // Only handle session.error and message.updated events
+    if (event.type !== "session.error" && event.type !== "message.updated") return false
 
     const props = event.properties as Record<string, unknown> | undefined
-    const sessionID = props?.sessionID as string | undefined
-    const error = props?.error
+    let sessionID: string | undefined
+    let error: unknown
+
+    if (event.type === "session.error") {
+      sessionID = props?.sessionID as string | undefined
+      error = props?.error
+    } else {
+      // message.updated: extract error from assistant message
+      const info = props?.info as Record<string, unknown> | undefined
+      sessionID = info?.sessionID as string | undefined
+      error = info?.error
+    }
 
     // Guard: require sessionID and error
     if (!sessionID || error === undefined || error === null) return false
@@ -86,6 +96,7 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       errorKeys: error && typeof error === "object" ? Object.keys(error as object) : [],
       messageSnippet: classification.reason?.substring(0, 100),
       sessionID,
+      eventType: event.type,
     })
 
     // 3. context_overflow → not handled (let context-window-recovery handle it)
