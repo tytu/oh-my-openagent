@@ -8,7 +8,7 @@
 
 ```
 features/
-├── background-agent/              # 后台任务管理器（1335 行）
+├── background-agent/              # 后台任务管理器（1326 行）
 │   ├── manager.ts                 # BackgroundManager 类
 │   ├── concurrency.ts             # 并发限制
 │   ├── perf-aggregator.ts         # 性能聚合
@@ -37,7 +37,7 @@ features/
 
 ## 核心组件
 
-### BackgroundManager（1335 行）
+### BackgroundManager（1326 行）
 
 后台任务生命周期管理器：
 - 任务队列和并发控制

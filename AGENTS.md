@@ -143,21 +143,21 @@ bun test               # 111 个测试文件
 
 | 文件 | 行数 | 描述 |
 |------|-------|-------------|
-| `src/features/background-agent/manager.ts` | 1335 | 任务生命周期、并发、runtime fallback |
-| `src/agents/prometheus-prompt.ts` | 1206 | 规划 Agent 提示词 |
+| `src/features/background-agent/manager.ts` | 1326 | 任务生命周期、并发、runtime fallback |
+| `src/agents/prometheus-prompt.ts` | 898 | 规划 Agent 提示词 |
 | `src/features/builtin-skills/skills.ts` | 886 | 技能定义 |
-| `src/tools/delegate-task/tools.ts` | 831 | 基于分类的委派 |
-| `src/hooks/atlas/index.ts` | 773 | 编排器钩子 |
-| `src/cli/config-manager.ts` | 664 | JSONC 配置解析 |
-| `src/features/builtin-commands/templates/refactor.ts` | 619 | 重构命令模板 |
+| `src/tools/delegate-task/tools.ts` | 790 | 基于分类的委派 |
 | `src/index.ts` | 676 | 主插件入口 |
+| `src/hooks/atlas/index.ts` | 604 | 编排器钩子 |
+| `src/cli/config-manager.ts` | 551 | JSONC 配置解析 |
 | `src/tools/lsp/client.ts` | 523 | LSP JSON-RPC 客户端 |
-| `src/agents/atlas.ts` | 581 | Atlas 编排器 Agent |
-| `src/hooks/todo-continuation-enforcer.ts` | 489 | TODO 强制完成 |
-| `src/agents/momus.ts` | 444 | 计划审查员 |
-| `src/shared/provider-error-classifier.ts` | ~150 | Provider 错误分类（429/402/quota）+ 文本分类 |
-| `src/shared/runtime-fallback.ts` | ~190 | Runtime fallback 决策服务 |
-| `src/hooks/runtime-fallback/index.ts` | ~325 | Runtime fallback hook（session.status 处理 + 模型健康注册表） |
+| `src/shared/provider-error-classifier.ts` | 494 | Provider 错误分类（429/402/quota）|
+| `src/agents/atlas.ts` | 461 | Atlas 编排器 Agent |
+| `src/features/builtin-commands/templates/refactor.ts` | 458 | 重构命令模板 |
+| `src/hooks/todo-continuation-enforcer.ts` | 410 | TODO 强制完成 |
+| `src/agents/momus.ts` | 339 | 计划审查员 |
+| `src/hooks/runtime-fallback/index.ts` | 329 | Runtime fallback hook（session.status 处理）|
+| `src/shared/runtime-fallback.ts` | 163 | Runtime fallback 决策服务 |
 
 ## MCP 架构
 

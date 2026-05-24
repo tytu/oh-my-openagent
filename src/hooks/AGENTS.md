@@ -8,9 +8,9 @@
 
 ```
 hooks/
-├── atlas/                      # 主编排（773 行）
+├── atlas/                      # 主编排（604 行）
 ├── anthropic-context-window-limit-recovery/  # 自动摘要
-├── todo-continuation-enforcer.ts # 强制 TODO 完成（489 行）
+├── todo-continuation-enforcer.ts # 强制 TODO 完成（410 行）
 ├── ralph-loop/                 # 自引用开发循环
 ├── claude-code-hooks/          # settings.json 兼容层 - 见 AGENTS.md
 ├── comment-checker/            # 防止 AI 垃圾内容

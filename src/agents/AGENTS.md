@@ -14,7 +14,7 @@ agents/
 ├── sisyphus.ts             # 主编排器（Claude Opus 4.5）
 ├── atlas.ts                # 主控编排器（Claude Opus 4.5）
 ├── prometheus.ts           # 战略规划（Claude Opus 4.5）
-├── prometheus-prompt.ts    # 规划提示词模板（1206 行）
+├── prometheus-prompt.ts    # 规划提示词模板（898 行）
 ├── oracle.ts               # 咨询、调试（GPT-5.2）
 ├── librarian.ts            # 文档、GitHub 搜索（Claude Sonnet 4.5）
 ├── explore.ts              # 快速代码搜索（Grok Code）
