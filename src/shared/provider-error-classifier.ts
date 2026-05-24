@@ -129,12 +129,24 @@ function isZhipuQuotaCode(code?: string | number): boolean {
  */
 function isGenericQuotaMessage(message: string): boolean {
   const m = message.toLowerCase()
+
+  // 排除短期 rate limit（per-minute/per-second/per-day 等 Gemini 风格）
+  if (m.includes("per_minute") || m.includes("per minute") ||
+      m.includes("per_second") || m.includes("per second") ||
+      m.includes("per_day") || m.includes("per day")) {
+    return false
+  }
+
   return (
     m.includes("usage quota") ||
     m.includes("quota exceeded") ||
     m.includes("exceeded your quota") ||
     (m.includes("quota") && m.includes("exceeded")) ||
-    m.includes("upgrade your plan")
+    m.includes("upgrade your plan") ||
+    // 长期 usage limit / balance（weekly/daily/monthly）
+    m.includes("usage limit") ||
+    m.includes("available balance") ||
+    m.includes("enable usage from")
   )
 }
 
@@ -323,6 +335,18 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
       statusCode,
       providerGuess: "zhipu",
       reason: `Zhipu/GLM: ${quotaReasons[code as number] ?? "quota exceeded"}`,
+    }
+  }
+
+  // 4.5. 通用 quota 消息检查（message 语义优先于 transport metadata）
+  // 在 rate_limit_error 之前，避免 429 + rate_limit_error 但 message 是 usage limit 的误分类
+  if (isGenericQuotaMessage(message)) {
+    return {
+      category: "quota",
+      retryable: false,
+      shouldFallback: true,
+      statusCode,
+      reason: `Quota exceeded: ${message.substring(0, 100)}`,
     }
   }
 
