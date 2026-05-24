@@ -265,7 +265,7 @@ describe("resolveNextFallbackModel", () => {
       }
     })
 
-    test("#given agent 和 category 都不存在 #when resolveNextFallbackModel #then 抛出错误", () => {
+    test("#given agent 和 category 都不存在 #when resolveNextFallbackModel #then 返回 unconfigured", () => {
       // #given
       const input: RuntimeFallbackInput = {
         agent: "nonexistent-agent",
@@ -273,19 +273,31 @@ describe("resolveNextFallbackModel", () => {
         attempts: [],
       }
 
-      // #when & #then
-      expect(() => resolveNextFallbackModel(input)).toThrow()
+      // #when
+      const result = resolveNextFallbackModel(input)
+
+      // #then
+      expect(result.kind).toBe("unconfigured")
+      if (result.kind === "unconfigured") {
+        expect(result.reason).toContain("No fallback chain")
+      }
     })
 
-    test("#given agent=undefined, category=undefined #when resolveNextFallbackModel #then 抛出错误", () => {
+    test("#given agent=undefined, category=undefined #when resolveNextFallbackModel #then 返回 unconfigured", () => {
       // #given
       const input: RuntimeFallbackInput = {
         currentModel: model("openai", "gpt-5.2"),
         attempts: [],
       }
 
-      // #when & #then
-      expect(() => resolveNextFallbackModel(input)).toThrow()
+      // #when
+      const result = resolveNextFallbackModel(input)
+
+      // #then
+      expect(result.kind).toBe("unconfigured")
+      if (result.kind === "unconfigured") {
+        expect(result.reason).toContain("No fallback chain")
+      }
     })
   })
 
@@ -352,6 +364,51 @@ describe("resolveNextFallbackModel", () => {
       if (result.kind === "exhausted") {
         expect(result.attempts).toHaveLength(9)
         expect(result.lastErrorClassification).toBe(lastError)
+        expect(result.reason).toContain("No fallback candidates")
+      }
+    })
+
+    test("#given maxAttempts 已达到 attempts 长度 #when resolveNextFallbackModel #then 返回 exhausted", () => {
+      // #given
+      const input: RuntimeFallbackInput = {
+        agent: "oracle",
+        currentModel: model("openai", "gpt-5.2", "high"),
+        attempts: [attempt(model("github-copilot", "gpt-5.2", "high"))],
+        maxAttempts: 1,
+      }
+
+      // #when
+      const result = resolveNextFallbackModel(input)
+
+      // #then
+      expect(result.kind).toBe("exhausted")
+      if (result.kind === "exhausted") {
+        expect(result.reason).toBe("max fallback attempts reached")
+      }
+    })
+  })
+
+  describe("configured fallback chain", () => {
+    test("#given configuredFallbackModels 存在 #when resolveNextFallbackModel #then 优先使用 configured chain", () => {
+      // #given
+      const input: RuntimeFallbackInput = {
+        agent: "oracle",
+        currentModel: model("openai", "gpt-5.2", "high"),
+        attempts: [],
+        configuredFallbackModels: [
+          model("volcengine", "deepseek-v4-flash"),
+          model("anthropic", "claude-haiku-4-5"),
+        ],
+      }
+
+      // #when
+      const result = resolveNextFallbackModel(input)
+
+      // #then
+      expect(result.kind).toBe("next")
+      if (result.kind === "next") {
+        expect(result.model.providerID).toBe("volcengine")
+        expect(result.model.modelID).toBe("deepseek-v4-flash")
       }
     })
   })

@@ -24,19 +24,33 @@ export interface FallbackAttempt {
   error?: ProviderErrorClassification
 }
 
+export interface FallbackSkip {
+  model?: FallbackModel
+  reason: string
+}
+
 export interface FallbackNextResult {
   kind: "next"
   model: FallbackModel
   attempts: FallbackAttempt[]
+  skipped?: FallbackSkip[]
 }
 
 export interface FallbackExhaustedResult {
   kind: "exhausted"
   attempts: FallbackAttempt[]
+  reason: string
+  skipped?: FallbackSkip[]
   lastErrorClassification?: ProviderErrorClassification
 }
 
-export type FallbackResult = FallbackNextResult | FallbackExhaustedResult
+export interface FallbackUnconfiguredResult {
+  kind: "unconfigured"
+  reason: string
+  skipped?: FallbackSkip[]
+}
+
+export type FallbackResult = FallbackNextResult | FallbackExhaustedResult | FallbackUnconfiguredResult
 
 export interface RuntimeFallbackInput {
   agent?: string
@@ -45,6 +59,8 @@ export interface RuntimeFallbackInput {
   attempts: FallbackAttempt[]
   availableModels?: Set<string>
   lastErrorClassification?: ProviderErrorClassification
+  configuredFallbackModels?: FallbackModel[]
+  maxAttempts?: number
 }
 
 /**
@@ -74,16 +90,14 @@ function modelKey(m: FallbackModel): string {
 /**
  * 从 AGENT_MODEL_REQUIREMENTS 或 CATEGORY_MODEL_REQUIREMENTS 获取 fallback chain
  */
-function getChain(agent?: string, category?: string): FallbackEntry[] {
+function getChain(agent?: string, category?: string): FallbackEntry[] | undefined {
   if (agent && AGENT_MODEL_REQUIREMENTS[agent]) {
     return AGENT_MODEL_REQUIREMENTS[agent].fallbackChain
   }
   if (category && CATEGORY_MODEL_REQUIREMENTS[category]) {
     return CATEGORY_MODEL_REQUIREMENTS[category].fallbackChain
   }
-  throw new Error(
-    `No fallback chain found for agent="${agent ?? ""}" category="${category ?? ""}"`,
-  )
+  return undefined
 }
 
 /**
@@ -104,56 +118,69 @@ export function resolveNextFallbackModel(input: RuntimeFallbackInput): FallbackR
     attempts,
     availableModels,
     lastErrorClassification,
+    configuredFallbackModels,
+    maxAttempts,
   } = input
 
-  // 1. 获取 fallback chain
+  if (maxAttempts !== undefined && attempts.length >= maxAttempts) {
+    return {
+      kind: "exhausted",
+      attempts,
+      reason: "max fallback attempts reached",
+      lastErrorClassification,
+    }
+  }
+
   const chain = getChain(agent, category)
+  const candidates = configuredFallbackModels && configuredFallbackModels.length > 0
+    ? configuredFallbackModels
+    : chain ? expandChain(chain) : undefined
 
-  // 2. 展开 chain 为候选列表
-  const candidates = expandChain(chain)
+  if (!candidates) {
+    return {
+      kind: "unconfigured",
+      reason: `No fallback chain found for agent="${agent ?? ""}" category="${category ?? ""}"`,
+    }
+  }
 
-  // 3. 构建需要跳过的 model 集合
   const skipKeys = new Set<string>()
   skipKeys.add(modelKey(currentModel))
   for (const a of attempts) {
     skipKeys.add(modelKey(a.model))
   }
 
-  // 4. 构建 result attempts（包含 currentModel）
-  const resultAttempts = [...attempts]
-  const currentKey = modelKey(currentModel)
-  const isInAttempts = attempts.some((a) => modelKey(a.model) === currentKey)
-  if (!isInAttempts) {
-    resultAttempts.push({ model: currentModel })
-  }
-
-  // 5. 遍历候选，跳过已尝试的，检查可用性
+  const skipped: FallbackSkip[] = []
   const hasAvailabilityFilter = availableModels != null && availableModels.size > 0
 
   for (const candidate of candidates) {
     const key = modelKey(candidate)
 
-    // 跳过已尝试的 model
-    if (skipKeys.has(key)) continue
-
-    // 如果有可用模型过滤，检查候选是否可用
-    if (hasAvailabilityFilter) {
-      const match = fuzzyMatchModel(key, availableModels!, [candidate.providerID])
-      if (!match) continue
+    if (skipKeys.has(key)) {
+      skipped.push({ model: candidate, reason: "already attempted or current model" })
+      continue
     }
 
-    // 找到有效候选
+    if (hasAvailabilityFilter) {
+      const match = fuzzyMatchModel(key, availableModels!, [candidate.providerID])
+      if (!match) {
+        skipped.push({ model: candidate, reason: "model unavailable" })
+        continue
+      }
+    }
+
     return {
       kind: "next",
       model: candidate,
-      attempts: resultAttempts,
+      attempts,
+      skipped,
     }
   }
 
-  // 6. 没有有效候选，返回 exhausted
   return {
     kind: "exhausted",
-    attempts: resultAttempts,
+    attempts,
+    reason: "No fallback candidates available",
+    skipped,
     lastErrorClassification,
   }
 }
