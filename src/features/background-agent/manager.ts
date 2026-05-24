@@ -12,7 +12,7 @@ import { ConcurrencyManager } from "./concurrency"
 import { classifyProviderError } from "../../shared/provider-error-classifier"
 import { resolveNextFallbackModel } from "../../shared/runtime-fallback"
 import { PerformanceAggregator } from "./perf-aggregator"
-import type { BackgroundTaskConfig } from "../../config/schema"
+import type { BackgroundTaskConfig, RuntimeFallbackConfig } from "../../config/schema"
 
 import { subagentSessions } from "../claude-code-session-state"
 import { getTaskToastManager } from "../task-toast-manager"
@@ -61,6 +61,10 @@ interface QueueItem {
   input: LaunchInput
 }
 
+type BackgroundManagerConfig = BackgroundTaskConfig & {
+  runtimeFallback?: RuntimeFallbackConfig
+}
+
 export class BackgroundManager {
   private static cleanupManagers = new Set<BackgroundManager>()
   private static cleanupRegistered = false
@@ -74,14 +78,14 @@ export class BackgroundManager {
   private pollingInterval?: ReturnType<typeof setInterval>
   private concurrencyManager: ConcurrencyManager
   private shutdownTriggered = false
-  private config?: BackgroundTaskConfig
+  private config?: BackgroundManagerConfig
   private perfAggregator = new PerformanceAggregator()
   private perfTracer?: PerfTracer
 
   private queuesByKey: Map<string, QueueItem[]> = new Map()
   private processingKeys: Set<string> = new Set()
 
-  constructor(ctx: PluginInput, config?: BackgroundTaskConfig) {
+  constructor(ctx: PluginInput, config?: BackgroundManagerConfig) {
     this.tasks = new Map()
     this.notifications = new Map()
     this.pendingByParent = new Map()
@@ -122,6 +126,7 @@ export class BackgroundManager {
       parentMessageID: input.parentMessageID,
       parentModel: input.parentModel,
       parentAgent: input.parentAgent,
+      category: input.category,
       model: input.model,
       maxSteps: this.config?.maxSteps,
       maxRuntimeMs: this.config?.maxRuntimeMs,
@@ -283,80 +288,87 @@ export class BackgroundManager {
         },
         parts: [{ type: "text", text: input.prompt }],
       },
-    }).catch((error) => {
-      log("[background-agent] promptAsync error:", error)
-      const existingTask = this.findBySession(sessionID)
-      if (existingTask) {
-        // Runtime fallback: 尝试 retry 或 fallback
-        const classification = classifyProviderError(error)
-        if (classification.retryable || classification.shouldFallback) {
-          const attempts = existingTask.attempts ?? []
-          const currentModel = input.model ?? { providerID: "", modelID: "" }
+    }).catch(async (error) => {
+      await this.handlePromptFailure(sessionID, input, error)
+    })
+  }
 
-          const fallbackResult = resolveNextFallbackModel({
-            agent: input.agent,
-            currentModel,
-            attempts,
-            lastErrorClassification: classification,
-          })
+  private async handlePromptFailure(sessionID: string, input: LaunchInput, error: unknown): Promise<void> {
+    log("[background-agent] promptAsync error:", error)
+    const existingTask = this.findBySession(sessionID)
+    if (!existingTask) return
 
-          if (fallbackResult.kind === "next") {
-            existingTask.attempts = [...attempts, {
-              model: fallbackResult.model,
-              error: classification,
-            }]
+    const runtimeFallback = this.config?.runtimeFallback
+    const classification = classifyProviderError(error)
+    const canFallback = runtimeFallback?.enabled !== false && (classification.retryable || classification.shouldFallback)
+    if (canFallback) {
+      let currentError = error
+      let currentClassification = classification
+      let currentModel = input.model ?? { providerID: "", modelID: "" }
 
-            log("[background-agent] Fallback to model:", fallbackResult.model)
-            this.client.session.prompt({
-              path: { id: sessionID },
-              body: {
-                agent: input.agent,
-                model: fallbackResult.model,
-                parts: [{ type: "text", text: input.prompt }],
-              },
-            }).catch((retryError) => {
-              log("[background-agent] Fallback prompt error:", retryError)
-              const task = this.findBySession(sessionID)
-              if (task) {
-                task.status = "error"
-                task.error = `Fallback failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`
-                task.completedAt = new Date()
-                if (task.concurrencyKey) {
-                  this.concurrencyManager.release(task.concurrencyKey)
-                  task.concurrencyKey = undefined
-                }
-                this.markForNotification(task)
-                this.notifyParentSession(task).catch(err => {
-                  log("[background-agent] Failed to notify on fallback error:", err)
-                })
-              }
-            })
-            return
-          }
-
-          // exhausted: 继续现有 error 流程
-          existingTask.error = `All fallback models exhausted. Last error: ${classification.reason}`
-        } else {
-          const errorMessage = error instanceof Error ? error.message : String(error)
-          if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
-            existingTask.error = `Agent "${input.agent}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.`
-          } else {
-            existingTask.error = errorMessage
-          }
-        }
-
-        existingTask.status = "error"
-        existingTask.completedAt = new Date()
-        if (existingTask.concurrencyKey) {
-          this.concurrencyManager.release(existingTask.concurrencyKey)
-          existingTask.concurrencyKey = undefined
-        }
-
-        this.markForNotification(existingTask)
-        this.notifyParentSession(existingTask).catch(err => {
-          log("[background-agent] Failed to notify on error:", err)
+      while (true) {
+        const attempts = existingTask.attempts ?? []
+        const fallbackResult = resolveNextFallbackModel({
+          agent: input.agent,
+          category: input.category,
+          currentModel,
+          attempts,
+          maxAttempts: runtimeFallback?.max_attempts,
+          lastErrorClassification: currentClassification,
         })
+
+        if (fallbackResult.kind !== "next") {
+          existingTask.error = fallbackResult.kind === "exhausted"
+            ? `All fallback models exhausted. Last error: ${currentClassification.reason}`
+            : fallbackResult.reason
+          break
+        }
+
+        log("[background-agent] Fallback to model:", fallbackResult.model)
+        try {
+          await this.client.session.prompt({
+            path: { id: sessionID },
+            body: {
+              agent: input.agent,
+              model: fallbackResult.model,
+              parts: [{ type: "text", text: input.prompt }],
+            },
+          })
+          existingTask.attempts = attempts
+          return
+        } catch (retryError) {
+          currentError = retryError
+          currentClassification = classifyProviderError(currentError)
+          existingTask.attempts = [...attempts, {
+            model: fallbackResult.model,
+            error: currentClassification,
+          }]
+          currentModel = fallbackResult.model
+          if (!currentClassification.retryable && !currentClassification.shouldFallback) {
+            existingTask.error = `Fallback failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`
+            break
+          }
+        }
       }
+    } else {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
+        existingTask.error = `Agent "${input.agent}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.`
+      } else {
+        existingTask.error = errorMessage
+      }
+    }
+
+    existingTask.status = "error"
+    existingTask.completedAt = new Date()
+    if (existingTask.concurrencyKey) {
+      this.concurrencyManager.release(existingTask.concurrencyKey)
+      existingTask.concurrencyKey = undefined
+    }
+
+    this.markForNotification(existingTask)
+    this.notifyParentSession(existingTask).catch(err => {
+      log("[background-agent] Failed to notify on error:", err)
     })
   }
 

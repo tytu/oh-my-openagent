@@ -58,6 +58,7 @@ export interface BackgroundTask {
   concurrencyGroup?: string
   /** Parent session's agent name for notification */
   parentAgent?: string
+  category?: string
 
   /** Last message count for stability detection */
   lastMsgCount?: number
@@ -83,6 +84,7 @@ export interface LaunchInput {
   parentMessageID: string
   parentModel?: { providerID: string; modelID: string }
   parentAgent?: string
+  category?: string
   model?: { providerID: string; modelID: string; variant?: string }
   skills?: string[]
   skillContent?: string
