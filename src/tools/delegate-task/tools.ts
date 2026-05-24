@@ -3,7 +3,7 @@ import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import type { BackgroundManager } from "../../features/background-agent"
 import type { DelegateTaskArgs } from "./types"
-import type { CategoryConfig, CategoriesConfig, GitMasterConfig } from "../../config/schema"
+import type { CategoryConfig, CategoriesConfig, FallbackModelEntry, GitMasterConfig, RuntimeFallbackConfig } from "../../config/schema"
 import { DEFAULT_CATEGORIES, CATEGORY_PROMPT_APPENDS, CATEGORY_DESCRIPTIONS } from "./constants"
 import { findNearestMessageWithFields, findFirstMessageWithAgent, MESSAGE_STORAGE } from "../../features/hook-message-injector"
 import { resolveMultipleSkillsAsync } from "../../features/opencode-skill-loader/skill-content"
@@ -16,6 +16,7 @@ import { fetchAvailableModels } from "../../shared/model-availability"
 import { resolveModelWithFallback } from "../../shared/model-resolver"
 import { CATEGORY_MODEL_REQUIREMENTS } from "../../shared/model-requirements"
 import { classifyProviderError } from "../../shared/provider-error-classifier"
+import { resolveNextFallbackModel, type FallbackAttempt, type FallbackModel } from "../../shared/runtime-fallback"
 
 type OpencodeClient = PluginInput["client"]
 
@@ -27,6 +28,20 @@ function parseModelString(model: string): { providerID: string; modelID: string 
     return { providerID: parts[0], modelID: parts.slice(1).join("/") }
   }
   return undefined
+}
+
+function parseFallbackModelEntries(entries?: FallbackModelEntry[]): FallbackModel[] | undefined {
+  return entries?.map((entry) => {
+    if ("model" in entry) {
+      const parsed = parseModelString(entry.model)
+      return {
+        providerID: parsed?.providerID ?? "",
+        modelID: parsed?.modelID ?? entry.model,
+        variant: entry.variant,
+      }
+    }
+    return entry
+  })
 }
 
 function getMessageDir(sessionID: string): string | null {
@@ -147,6 +162,8 @@ export interface DelegateTaskToolOptions {
   userCategories?: CategoriesConfig
   gitMasterConfig?: GitMasterConfig
   sisyphusJuniorModel?: string
+  runtimeFallbackConfig?: RuntimeFallbackConfig
+  agentFallbackModels?: Record<string, FallbackModelEntry[] | undefined>
 }
 
 export interface BuildSystemContentInput {
@@ -169,9 +186,15 @@ export function buildSystemContent(input: BuildSystemContentInput): string | und
 }
 
 export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefinition {
-  const { manager, client, directory, userCategories, gitMasterConfig, sisyphusJuniorModel } = options
+  const { manager, client, directory, userCategories, gitMasterConfig, sisyphusJuniorModel, runtimeFallbackConfig, agentFallbackModels } = options
 
   const allCategories = { ...DEFAULT_CATEGORIES, ...userCategories }
+  const getConfiguredFallbackModels = (agent?: string, category?: string) => {
+    const agentModels = agent ? agentFallbackModels?.[agent] : undefined
+    if (agentModels) return parseFallbackModelEntries(agentModels)
+    const categoryModels = category ? userCategories?.[category]?.fallback_models : undefined
+    return parseFallbackModelEntries(categoryModels)
+  }
   const categoryNames = Object.keys(allCategories)
   const categoryExamples = categoryNames.map(k => `'${k}'`).join(", ")
 
@@ -564,6 +587,7 @@ ${textContent || "(无文本输出)"}
             parentMessageID: ctx.messageID,
             parentModel,
             parentAgent,
+            category: args.category,
             model: categoryModel,
             skills: args.load_skills.length > 0 ? args.load_skills : undefined,
             skillContent: systemContent,
@@ -676,26 +700,84 @@ Status: ${task.status}
             },
           })
         } catch (promptError) {
-          if (toastManager && taskId !== undefined) {
-            toastManager.removeTask(taskId)
-          }
-          const errorMessage = promptError instanceof Error ? promptError.message : String(promptError)
-          if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
-            return formatDetailedError(new Error(`Agent "${agentToUse}" 未找到。请确认该 agent 已在 opencode.json 中注册或由插件提供。`), {
-              operation: "发送 prompt 给 agent",
+          const classification = classifyProviderError(promptError)
+          const canFallback = runtimeFallbackConfig?.enabled !== false && (classification.retryable || classification.shouldFallback)
+          if (canFallback) {
+            const attempts: FallbackAttempt[] = []
+            let fallbackSucceeded = false
+            let currentModel = categoryModel ?? { providerID: "", modelID: "" }
+            let currentClassification = classification
+            while (true) {
+              const fallbackResult = resolveNextFallbackModel({
+                agent: agentToUse,
+                category: args.category,
+                currentModel,
+                attempts,
+                configuredFallbackModels: getConfiguredFallbackModels(agentToUse, args.category),
+                maxAttempts: runtimeFallbackConfig?.max_attempts,
+                lastErrorClassification: currentClassification,
+              })
+              if (fallbackResult.kind !== "next") break
+              try {
+                await client.session.prompt({
+                  path: { id: sessionID },
+                  body: {
+                    agent: agentToUse,
+                    system: systemContent,
+                    tools: {
+                      task: false,
+                      delegate_task: false,
+                      call_omo_agent: true,
+                    },
+                    parts: [{ type: "text", text: args.prompt }],
+                    model: fallbackResult.model,
+                  },
+                })
+                fallbackSucceeded = true
+                break
+              } catch (fallbackError) {
+                currentClassification = classifyProviderError(fallbackError)
+                attempts.push({ model: fallbackResult.model, error: currentClassification })
+                currentModel = fallbackResult.model
+                if (!currentClassification.retryable && !currentClassification.shouldFallback) {
+                  throw fallbackError
+                }
+              }
+            }
+            if (!fallbackSucceeded) {
+              if (toastManager && taskId !== undefined) {
+                toastManager.removeTask(taskId)
+              }
+              return formatDetailedError(promptError, {
+                operation: "发送 prompt",
+                args,
+                sessionID,
+                agent: agentToUse,
+                category: args.category,
+              })
+            }
+          } else {
+            if (toastManager && taskId !== undefined) {
+              toastManager.removeTask(taskId)
+            }
+            const errorMessage = promptError instanceof Error ? promptError.message : String(promptError)
+            if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
+              return formatDetailedError(new Error(`Agent "${agentToUse}" 未找到。请确认该 agent 已在 opencode.json 中注册或由插件提供。`), {
+                operation: "发送 prompt 给 agent",
+                args,
+                sessionID,
+                agent: agentToUse,
+                category: args.category,
+              })
+            }
+            return formatDetailedError(promptError, {
+              operation: "发送 prompt",
               args,
               sessionID,
               agent: agentToUse,
               category: args.category,
             })
           }
-          return formatDetailedError(promptError, {
-            operation: "发送 prompt",
-            args,
-            sessionID,
-            agent: agentToUse,
-            category: args.category,
-          })
         }
 
         // Poll for session completion with stability detection
@@ -774,7 +856,7 @@ Status: ${task.status}
         if (messagesResult.error) {
           const classification = classifyProviderError(messagesResult.error)
           const diagnosis = classification.category !== "unknown"
-            ? `\n\n🔍 **错误分类**: ${classification.reason}\n${classification.shouldFallback ? "💡 此错误可通过 runtime fallback 自动处理。" : classification.retryable ? "⏳ 此错误可重试。" : ""}`
+            ? `\n\n🔍 **错误分类**: ${classification.reason}\n${classification.shouldFallback ? "💡 此错误符合 runtime fallback 条件。" : classification.retryable ? "⏳ 此错误可重试。" : ""}`
             : ""
           return `Error fetching result: ${messagesResult.error}${diagnosis}\n\nSession ID: ${sessionID}`
         }
@@ -826,7 +908,7 @@ ${textContent || "(无文本输出)"}
 
         const classification = classifyProviderError(error)
         const diagnosis = classification.category !== "unknown"
-          ? `\n\n🔍 **错误分类**: ${classification.reason}\n${classification.shouldFallback ? "💡 此错误可通过 runtime fallback 自动处理。" : classification.retryable ? "⏳ 此错误可重试。" : ""}`
+          ? `\n\n🔍 **错误分类**: ${classification.reason}\n${classification.shouldFallback ? "💡 此错误符合 runtime fallback 条件。" : classification.retryable ? "⏳ 此错误可重试。" : ""}`
           : ""
 
         return `任务执行失败: ${error instanceof Error ? error.message : String(error)}${diagnosis}\n\nSession ID: ${syncSessionID ?? "unknown"}`
