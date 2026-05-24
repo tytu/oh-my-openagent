@@ -1,0 +1,638 @@
+import { describe, expect, test } from "bun:test"
+import { classifyProviderError } from "./provider-error-classifier"
+import type { ErrorCategory, ProviderErrorClassification } from "./provider-error-classifier"
+
+describe("classifyProviderError", () => {
+  describe("OpenAI errors", () => {
+    test("HTTP 429 + rate_limit_exceeded → retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: "rate_limit_exceeded",
+          message: "Rate limit reached",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+      expect(result.statusCode).toBe(429)
+    })
+
+    test("HTTP 429 + insufficient_quota code → quota fallbackable, not retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: "insufficient_quota",
+          message: "You exceeded your current quota",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 429 + insufficient_quota type → quota fallbackable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          type: "insufficient_quota",
+          message: "Insufficient quota",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+  })
+
+  describe("Anthropic errors", () => {
+    test("HTTP 429 + rate_limit_error → retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          type: "rate_limit_error",
+          message: "Rate limit exceeded",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("HTTP 402 + billing_error → billing fallbackable", () => {
+      // #given
+      const error = {
+        status: 402,
+        error: {
+          type: "billing_error",
+          message: "Payment required",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 529 + overloaded_error → retryable", () => {
+      // #given
+      const error = {
+        status: 529,
+        error: {
+          type: "overloaded_error",
+          message: "API is currently overloaded",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("overloaded")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+  })
+
+  describe("Gemini errors", () => {
+    test("HTTP 429 + RESOURCE_EXHAUSTED + per-minute details → retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          status: "RESOURCE_EXHAUSTED",
+          message: "Quota exceeded for quota metric per_minute",
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.RetryInfo",
+              retryDelay: "30s",
+            },
+          ],
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("HTTP 429 + RESOURCE_EXHAUSTED + quota details → quota fallbackable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          status: "RESOURCE_EXHAUSTED",
+          message: "Quota exceeded for quota metric per_day",
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+              violations: [],
+            },
+          ],
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+  })
+
+  describe("xAI/Grok errors", () => {
+    test("HTTP 429 → retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        message: "Rate limit exceeded",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+  })
+
+  describe("Zhipu/GLM errors", () => {
+    test("HTTP 429 + error code 1302 (concurrency) → retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: 1302,
+          message: "并发请求超过限制",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("HTTP 429 + error code 1303 (frequency) → retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: 1303,
+          message: "请求频率超过限制",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("HTTP 429 + error code 1312 (load) → retryable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: 1312,
+          message: "当前负载过高",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("overloaded")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("HTTP 429 + error code 1113 (arrears) → quota fallbackable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: 1113,
+          message: "账户欠费",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 429 + error code 1304 (call limit) → quota fallbackable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: 1304,
+          message: "调用次数超过限额",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 429 + error code 1308 (usage limit) → quota fallbackable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: 1308,
+          message: "使用量超过上限",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 429 + error code 1309 (package expired) → quota fallbackable", () => {
+      // #given
+      const error = {
+        status: 429,
+        error: {
+          code: 1309,
+          message: "套餐已到期",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+  })
+
+  describe("Generic quota message detection", () => {
+    test("pure string 'You have exceeded the 5-hour usage quota' → quota fallbackable", () => {
+      // #given
+      const error = "You have exceeded the 5-hour usage quota. It will reset at 2026-05-24 22:01:42 +0800 CST."
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("object with message 'usage quota exceeded for plan' → quota fallbackable", () => {
+      // #given
+      const error = {
+        message: "usage quota exceeded for plan",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("object with status 429 and '5-hour usage quota exceeded' → rate_limit (429 wins over message)", () => {
+      // #given
+      const error = {
+        status: 429,
+        message: "5-hour usage quota exceeded",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("non-quota message 'rate limit exceeded, retry' → not quota", () => {
+      // #given
+      const error = {
+        status: 429,
+        message: "rate limit exceeded, retry after 30s",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).not.toBe("quota")
+    })
+  })
+
+  describe("Context overflow errors", () => {
+    test("context_length_exceeded → context_overflow, not fallbackable", () => {
+      // #given
+      const error = {
+        error: {
+          message: "This model's maximum context length is 128000 tokens",
+          code: "context_length_exceeded",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("context_overflow")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("prompt is too long → context_overflow", () => {
+      // #given
+      const error = {
+        error: {
+          message: "prompt is too long: 200000 tokens > 128000 maximum",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("context_overflow")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(false)
+    })
+  })
+
+  describe("Provider and model unavailable errors", () => {
+    test("HTTP 400 invalid model → model_unavailable fallbackable", () => {
+      // #given
+      const error = {
+        status: 400,
+        error: {
+          message: "invalid model: invalid-provider/invalid-model",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("model_unavailable")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 404 model not found → model_unavailable fallbackable", () => {
+      // #given
+      const error = {
+        status: 404,
+        error: {
+          message: "model not found: claude-nope",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("model_unavailable")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 422 unsupported model → model_unavailable fallbackable", () => {
+      // #given
+      const error = {
+        status: 422,
+        error: {
+          message: "unsupported model for this provider",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("model_unavailable")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("HTTP 400 invalid provider → provider_unavailable fallbackable", () => {
+      // #given
+      const error = {
+        status: 400,
+        error: {
+          message: "unknown provider: invalid-provider",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("provider_unavailable")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+  })
+
+  describe("Non-recoverable errors", () => {
+    test("HTTP 401 → auth error, not fallbackable", () => {
+      // #given
+      const error = {
+        status: 401,
+        error: {
+          message: "Invalid API key",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("auth")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("HTTP 403 → auth error, not fallbackable", () => {
+      // #given
+      const error = {
+        status: 403,
+        error: {
+          message: "Permission denied",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("auth")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("HTTP 400 → bad request, not fallbackable", () => {
+      // #given
+      const error = {
+        status: 400,
+        error: {
+          message: "Invalid request body",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("bad_request")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(false)
+    })
+  })
+
+  describe("Input format handling", () => {
+    test("handles Error instance", () => {
+      // #given
+      const error = new Error("Rate limit exceeded")
+      ;(error as any).status = 429
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+    })
+
+    test("handles string error", () => {
+      // #given
+      const error = "context_length_exceeded: prompt too long"
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("context_overflow")
+      expect(result.retryable).toBe(false)
+    })
+
+    test("handles unknown error gracefully", () => {
+      // #given
+      const error = { some: "random", data: true }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("unknown")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(false)
+    })
+  })
+
+  describe("Retry-After parsing", () => {
+    test("parses Retry-After header in seconds", () => {
+      // #given
+      const error = {
+        status: 429,
+        headers: {
+          "retry-after": "30",
+        },
+        error: {
+          message: "Rate limit exceeded",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.retryAfterMs).toBe(30000)
+    })
+
+    test("parses x-ratelimit-reset header", () => {
+      // #given
+      const resetTime = Math.floor(Date.now() / 1000) + 60
+      const error = {
+        status: 429,
+        headers: {
+          "x-ratelimit-reset": String(resetTime),
+        },
+        error: {
+          message: "Rate limit exceeded",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.retryAfterMs).toBeGreaterThan(0)
+      expect(result.retryAfterMs).toBeLessThanOrEqual(60000)
+    })
+  })
+})
