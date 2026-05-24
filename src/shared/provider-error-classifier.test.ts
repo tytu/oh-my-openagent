@@ -635,4 +635,150 @@ describe("classifyProviderError", () => {
       expect(result.retryAfterMs).toBeLessThanOrEqual(60000)
     })
   })
+
+  describe("Usage limit quota messages", () => {
+    test("weekly usage limit reached → quota", () => {
+      // #given
+      const error = "weekly usage limit reached. It will reset in 9 hours 54 minutes. To continue using this model now, enable usage from your available balance - https://opencode.ai/workspace/wrk_01KS08BB9W6ZEQC6701PHAJWT6/settings"
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("available balance message → quota", () => {
+      // #given
+      const error = "To continue using this model now, enable usage from your available balance"
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("daily usage limit reached → quota", () => {
+      // #given
+      const error = "daily usage limit reached"
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("monthly usage limit reached → quota", () => {
+      // #given
+      const error = "monthly usage limit reached"
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("429 + rate_limit_error + weekly usage limit → quota (not rate_limit)", () => {
+      // #given - Anthropic 风格，message 语义优先于 type
+      const error = {
+        status: 429,
+        error: {
+          type: "rate_limit_error",
+          message: "weekly usage limit reached. It will reset in 9 hours 54 minutes.",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("429 + generic quota message → quota", () => {
+      // #given - xAI/Grok 风格
+      const error = {
+        status: 429,
+        message: "usage limit reached. enable usage from your available balance",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("429 + rate_limit_exceeded → rate_limit (not quota)", () => {
+      // #given - 普通短期限流，不应误判为 quota
+      const error = {
+        status: 429,
+        error: {
+          code: "rate_limit_exceeded",
+          message: "Rate limit reached",
+        },
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("too many requests → rate_limit (not quota)", () => {
+      // #given - 普通短期限流
+      const error = {
+        status: 429,
+        message: "too many requests, please retry later",
+      }
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("context length exceeded → unknown (not quota)", () => {
+      // #given - context overflow，不应误判为 quota
+      const error = "context length exceeded, prompt too long"
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).not.toBe("quota")
+    })
+
+    test("maximum tokens exceeded → unknown (not quota)", () => {
+      // #given - token limit，不应误判为 quota
+      const error = "maximum tokens exceeded for this request"
+
+      // #when
+      const result = classifyProviderError(error)
+
+      // #then
+      expect(result.category).not.toBe("quota")
+    })
+  })
 })
