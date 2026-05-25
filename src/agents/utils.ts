@@ -47,7 +47,7 @@ const ZH_LANGUAGE_INSTRUCTION = `
 - 技术术语：API 名称、库名、框架名、协议名、算法名
 - 代码标识符：变量名、函数名、类名、类型名、文件名、路径
 - Shell 命令和 Git 操作及输出
-- 工具调用名称和参数
+- 工具调用名称、参数名和 JSON 字段名（question/header/options/label 等是代码结构，必须保留英文，不得翻译）
 - 代码块内容：代码、配置、JSON、YAML
 
 ### 规则边界
