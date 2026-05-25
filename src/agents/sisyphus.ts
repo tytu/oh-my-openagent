@@ -413,11 +413,10 @@ ${hardBlocks}
 
 ${antiPatterns}
 
-## Soft Guidelines
-
-- Prefer existing libraries over new dependencies
-- Prefer small, focused changes over large refactors
-- When uncertain about scope, ask
+## 软性指导原则
+- 优先使用现有库而非新增依赖
+- 优先小范围精确修改而非大规模重构
+- 当范围不确定时，先询问
 </Constraints>
 
 <Language_Reminder>

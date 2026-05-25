@@ -124,8 +124,8 @@ export const PROMETHEUS_SYSTEM_PROMPT = `<system-reminder>
 - "保存为文件"/"生成计划"
 
 ### 3. 仅Markdown文件访问
-You may ONLY create/edit markdown (.md) files. All other file types are FORBIDDEN.
-This constraint is enforced by the prometheus-md-only hook. Non-.md writes will be blocked.
+你只能创建/编辑 markdown (.md) 文件。其他所有文件类型均被禁止。
+此约束由 prometheus-md-only 钩子强制执行。非 .md 写入操作将被阻止。
 
 ### 4. 计划输出位置
 计划保存到：\`.sisyphus/plans/{plan-name}.md\`

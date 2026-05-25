@@ -256,7 +256,7 @@ Prompts 必须为中文。`
         if (notFound.length > 0) {
           const allSkills = await discoverSkills({ includeClaudeCodePaths: true })
           const available = allSkills.map(s => s.name).join(", ")
-          return `Skills not found: ${notFound.join(", ")}. Available: ${available}`
+          return `未找到技能：${notFound.join(", ")}。可用技能：${available}`
         }
         skillContent = Array.from(resolved.values()).join("\n\n")
       }
@@ -307,11 +307,11 @@ Prompts 必须为中文。`
 
             return `后台任务已继续。
 
-Task ID: ${task.id}
-Session ID: ${task.sessionID}
-Description: ${task.description}
-Agent: ${task.agent}
-Status: ${task.status}
+            任务ID：${task.id}
+            会话ID：${task.sessionID}
+            描述：${task.description}
+            代理：${task.agent}
+            状态：${task.status}
 
 Agent 继续执行，保留完整上下文。
 使用 \`background_output\` 并传入 task_id="${task.id}" 查看进度。`
@@ -395,7 +395,7 @@ Agent 继续执行，保留完整上下文。
             toastManager.removeTask(taskId)
           }
           const errorMessage = promptError instanceof Error ? promptError.message : String(promptError)
-          return `发送继续 prompt 失败：${errorMessage}\n\nSession ID: ${args.session_id}`
+          return `发送继续 prompt 失败：${errorMessage}\n\n会话ID： ${args.session_id}`
         }
 
         // Wait for message stability after prompt completes
@@ -433,7 +433,7 @@ Agent 继续执行，保留完整上下文。
           if (toastManager) {
             toastManager.removeTask(taskId)
           }
-          return `获取结果出错：${messagesResult.error}\n\nSession ID: ${args.session_id}`
+          return `获取结果出错：${messagesResult.error}\n\n会话ID： ${args.session_id}`
         }
 
         const messages = ((messagesResult as { data?: unknown }).data ?? messagesResult) as Array<{
@@ -451,7 +451,7 @@ Agent 继续执行，保留完整上下文。
         }
 
         if (!lastMessage) {
-          return `未找到 assistant 的响应。\n\nSession ID: ${args.session_id}`
+          return `未找到 assistant 的响应。\n\n会话ID： ${args.session_id}`
         }
 
         // Extract text from both "text" and "reasoning" parts (thinking models use "reasoning")
@@ -462,7 +462,7 @@ Agent 继续执行，保留完整上下文。
 
         return `任务已继续并在 ${duration} 内完成。
 
-Session ID: ${args.session_id}
+会话ID： ${args.session_id}
 
 ---
 
@@ -609,11 +609,11 @@ ${textContent || "(无文本输出)"}
 
           return `后台任务已启动。
 
-Task ID: ${task.id}
-Session ID: ${task.sessionID}
-Description: ${task.description}
-Agent: ${task.agent}${args.category ? ` (category: ${args.category})` : ""}
-Status: ${task.status}
+          任务ID：${task.id}
+          会话ID：${task.sessionID}
+          描述：${task.description}
+          代理：${task.agent}${args.category ? ` (category: ${args.category})` : ""}
+          状态：${task.status}
 
 完成时系统会通知。使用 \`background_output\` 并传入 task_id="${task.id}" 查看。
 继续此 session：session_id="${task.sessionID}"`
@@ -797,7 +797,7 @@ Status: ${task.status}
           if (ctx.abort?.aborted) {
             log("[delegate_task] Aborted by user", { sessionID })
             if (toastManager && taskId) toastManager.removeTask(taskId)
-            return `任务已中止。\n\nSession ID: ${sessionID}`
+            return `任务已中止。\n\n会话ID： ${sessionID}`
           }
 
           await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
@@ -858,7 +858,7 @@ Status: ${task.status}
           const diagnosis = classification.category !== "unknown"
             ? `\n\n🔍 **错误分类**: ${classification.reason}\n${classification.shouldFallback ? "💡 此错误符合 runtime fallback 条件。" : classification.retryable ? "⏳ 此错误可重试。" : ""}`
             : ""
-          return `Error fetching result: ${messagesResult.error}${diagnosis}\n\nSession ID: ${sessionID}`
+          return `获取结果失败：${messagesResult.error}${diagnosis}\n\n会话ID： ${sessionID}`
         }
 
         const messages = ((messagesResult as { data?: unknown }).data ?? messagesResult) as Array<{
@@ -872,7 +872,7 @@ Status: ${task.status}
         const lastMessage = assistantMessages[0]
 
         if (!lastMessage) {
-          return `未找到 assistant 的响应。\n\nSession ID: ${sessionID}`
+          return `未找到 assistant 的响应。\n\n会话ID： ${sessionID}`
         }
 
         // Extract text from both "text" and "reasoning" parts (thinking models use "reasoning")
@@ -889,8 +889,8 @@ Status: ${task.status}
 
         return `任务在 ${duration} 内完成。
 
-Agent: ${agentToUse}${args.category ? ` (category: ${args.category})` : ""}
-Session ID: ${sessionID}
+代理：${agentToUse}${args.category ? ` (category: ${args.category})` : ""}
+会话ID： ${sessionID}
 
 ---
 
@@ -911,7 +911,7 @@ ${textContent || "(无文本输出)"}
           ? `\n\n🔍 **错误分类**: ${classification.reason}\n${classification.shouldFallback ? "💡 此错误符合 runtime fallback 条件。" : classification.retryable ? "⏳ 此错误可重试。" : ""}`
           : ""
 
-        return `任务执行失败: ${error instanceof Error ? error.message : String(error)}${diagnosis}\n\nSession ID: ${syncSessionID ?? "unknown"}`
+        return `任务执行失败: ${error instanceof Error ? error.message : String(error)}${diagnosis}\n\n会话ID： ${syncSessionID ?? "unknown"}`
       }
     },
   })
