@@ -109,7 +109,7 @@ export class BackgroundManager {
     })
 
     if (!input.agent || input.agent.trim() === "") {
-      throw new Error("Agent parameter is required")
+      throw new Error("Agent 参数为必填项")
     }
 
     // Create task immediately with status="pending"
@@ -237,7 +237,7 @@ export class BackgroundManager {
 
     if (createResult.error) {
       this.concurrencyManager.release(concurrencyKey)
-      throw new Error(`Failed to create background session: ${createResult.error}`)
+      throw new Error(`创建后台会话失败：${createResult.error}`)
     }
 
     const sessionID = createResult.data.id
@@ -319,7 +319,7 @@ export class BackgroundManager {
 
         if (fallbackResult.kind !== "next") {
           existingTask.error = fallbackResult.kind === "exhausted"
-            ? `All fallback models exhausted. Last error: ${currentClassification.reason}`
+            ? `所有 fallback 模型已耗尽。最后错误：${currentClassification.reason}`
             : fallbackResult.reason
           break
         }
@@ -353,7 +353,7 @@ export class BackgroundManager {
     } else {
       const errorMessage = error instanceof Error ? error.message : String(error)
       if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
-        existingTask.error = `Agent "${input.agent}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.`
+        existingTask.error = `未找到 Agent "${input.agent}"。请确认已在 opencode.json 中注册或由插件提供。`
       } else {
         existingTask.error = errorMessage
       }
@@ -514,11 +514,11 @@ export class BackgroundManager {
   async resume(input: ResumeInput): Promise<BackgroundTask> {
     const existingTask = this.findBySession(input.sessionId)
     if (!existingTask) {
-      throw new Error(`Task not found for session: ${input.sessionId}`)
+      throw new Error(`未找到会话的任务：${input.sessionId}`)
     }
 
     if (!existingTask.sessionID) {
-      throw new Error(`Task has no sessionID: ${existingTask.id}`)
+      throw new Error(`任务缺少 sessionID：${existingTask.id}`)
     }
 
     if (existingTask.status === "running") {
@@ -739,7 +739,7 @@ export class BackgroundManager {
       if (task.status === "running") {
         task.status = "cancelled"
         task.completedAt = new Date()
-        task.error = "Session deleted"
+        task.error = "会话已删除"
       }
 
        if (task.concurrencyKey) {
@@ -1160,8 +1160,8 @@ ${perfSnapshot ? `| 排队 ${PerfTimer.formatDuration(new Date(0), new Date(perf
       const age = now - timestamp
       if (age > TASK_TTL_MS) {
         const errorMessage = task.status === "pending"
-          ? "Task timed out while queued (30 minutes)"
-          : "Task timed out after 30 minutes"
+          ? "任务在队列中超时（30 分钟）"
+          : "任务在 30 分钟后超时"
         
         log("[background-agent] Pruning stale task:", { taskId, status: task.status, age: Math.round(age / 1000) + "s" })
         task.status = "error"
@@ -1217,7 +1217,7 @@ ${perfSnapshot ? `| 排队 ${PerfTimer.formatDuration(new Date(0), new Date(perf
       // Check runtime limit
       if (this.isRuntimeLimitExceeded(task)) {
         task.status = "cancelled"
-        task.error = `Runtime limit exceeded (${Math.round(runtime / 60000)}min)`
+        task.error = `运行时间超限（${Math.round(runtime / 60000)} 分钟）`
         task.completedAt = new Date()
 
         if (task.concurrencyKey) {
@@ -1240,7 +1240,7 @@ ${perfSnapshot ? `| 排队 ${PerfTimer.formatDuration(new Date(0), new Date(perf
       if (this.isStepTimeoutExceeded(task)) {
         const stepTimeoutMs = task.stepTimeoutMs ?? STEP_TIMEOUT_MS
         task.status = "cancelled"
-        task.error = `Step timeout exceeded (single step > ${Math.round(stepTimeoutMs / 60000)}min)`
+        task.error = `单步超时（超过 ${Math.round(stepTimeoutMs / 60000)} 分钟）`
         task.completedAt = new Date()
 
         if (task.concurrencyKey) {
@@ -1266,7 +1266,7 @@ ${perfSnapshot ? `| 排队 ${PerfTimer.formatDuration(new Date(0), new Date(perf
 
       const staleMinutes = Math.round(timeSinceLastUpdate / 60000)
       task.status = "cancelled"
-      task.error = `Stale timeout (no activity for ${staleMinutes}min)`
+      task.error = `停滞超时（${staleMinutes} 分钟无活动）`
       task.completedAt = new Date()
 
       if (task.concurrencyKey) {
