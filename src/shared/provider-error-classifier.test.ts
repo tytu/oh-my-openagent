@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { classifyProviderError } from "./provider-error-classifier"
+import { classifyProviderError, classifyTextMessage, isGenericQuotaMessage } from "./provider-error-classifier"
 import type { ErrorCategory, ProviderErrorClassification } from "./provider-error-classifier"
 
 describe("classifyProviderError", () => {
@@ -1125,6 +1125,140 @@ describe("classifyProviderError", () => {
 
       // #then
       expect(result.category).toBe("quota")
+    })
+  })
+})
+
+describe("isGenericQuotaMessage (exported)", () => {
+  test("matches quota exceeded messages", () => {
+    expect(isGenericQuotaMessage("usage quota exceeded")).toBe(true)
+    expect(isGenericQuotaMessage("quota exceeded for this month")).toBe(true)
+    expect(isGenericQuotaMessage("you have exceeded your quota")).toBe(true)
+  })
+
+  test("matches usage limit and balance messages", () => {
+    expect(isGenericQuotaMessage("weekly usage limit reached")).toBe(true)
+    expect(isGenericQuotaMessage("available balance is zero")).toBe(true)
+    expect(isGenericQuotaMessage("upgrade your plan for more quota")).toBe(true)
+    expect(isGenericQuotaMessage("enable usage from billing")).toBe(true)
+  })
+
+  test("excludes short-term rate limits", () => {
+    expect(isGenericQuotaMessage("rate limit per_minute exceeded")).toBe(false)
+    expect(isGenericQuotaMessage("too many requests per second")).toBe(false)
+    expect(isGenericQuotaMessage("quota per day exceeded")).toBe(false)
+  })
+
+  test("does not match unrelated messages", () => {
+    expect(isGenericQuotaMessage("connection timeout")).toBe(false)
+    expect(isGenericQuotaMessage("internal server error")).toBe(false)
+  })
+})
+
+describe("classifyTextMessage", () => {
+  describe("quota detection", () => {
+    test("weekly usage limit → quota, shouldFallback", () => {
+      // #given
+      const message = "You have exceeded the weekly usage limit. Please wait for reset."
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("available balance → quota, shouldFallback", () => {
+      // #given
+      const message = "Your available balance is insufficient for this request"
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("upgrade your plan → quota, shouldFallback", () => {
+      // #given
+      const message = "Please upgrade your plan for more quota"
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.shouldFallback).toBe(true)
+    })
+
+    test("actual Anthropic 5-hour usage quota message → quota, shouldFallback", () => {
+      // #given - 真实 sub-agent 卡住场景的消息
+      const message = "You have exceeded the 5-hour usage quota. It will reset at 2026-05-25 03:06:06 +0800 CST. We recommend upgrading your plan for more quota, or waiting for the reset. Request id: 021779646010709fadef930"
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("quota")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(true)
+    })
+  })
+
+  describe("rate_limit detection", () => {
+    test("rate limit exceeded → rate_limit, retryable", () => {
+      // #given
+      const message = "Rate limit exceeded, please try again later"
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("too many requests → rate_limit, retryable", () => {
+      // #given
+      const message = "Too many requests, please slow down"
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("rate_limit")
+      expect(result.retryable).toBe(true)
+      expect(result.shouldFallback).toBe(false)
+    })
+  })
+
+  describe("unknown errors", () => {
+    test("random error → unknown, not retryable, no fallback", () => {
+      // #given
+      const message = "Something went wrong on our end"
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("unknown")
+      expect(result.retryable).toBe(false)
+      expect(result.shouldFallback).toBe(false)
+    })
+
+    test("empty message → unknown", () => {
+      // #given
+      const message = ""
+
+      // #when
+      const result = classifyTextMessage(message)
+
+      // #then
+      expect(result.category).toBe("unknown")
     })
   })
 })

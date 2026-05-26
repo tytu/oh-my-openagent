@@ -10,7 +10,7 @@
 
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { RuntimeFallbackConfig } from "../../config/schema"
-import { classifyProviderError } from "../../shared/provider-error-classifier"
+import { classifyProviderError, classifyTextMessage } from "../../shared/provider-error-classifier"
 import { calculateRetryDelay, DEFAULT_RETRY_CONFIG } from "../../shared/retry-strategy"
 import { log } from "../../shared/logger"
 import { resolveNextFallbackModel, type FallbackAttempt, type FallbackModel } from "../../shared/runtime-fallback"
@@ -28,19 +28,70 @@ interface RetryState {
   lastAttemptTime: number
 }
 
+interface ModelHealthEntry {
+  lastErrorTime: number
+  errorCount: number
+  lastCategory: string
+  sessions: Set<string>
+}
+
+const REGISTRY_TTL = 60 * 60 * 1000 // 1 hour
+const MAX_ERROR_COUNT = 5
+
 export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFallbackOptions) {
   const retryStates = new Map<string, RetryState>()
   const fallbackAttempts = new Map<string, FallbackAttempt[]>()
   const interruptingSessions = new Map<string, boolean>()
+  const modelHealthRegistry = new Map<string, ModelHealthEntry>()
   const config = options?.config ?? {
     enabled: true,
-    max_attempts: 3,
+    max_attempts: 6,
     max_retries_before_fallback: 2,
     initial_delay_ms: DEFAULT_RETRY_CONFIG.initial_delay_ms,
     backoff_factor: DEFAULT_RETRY_CONFIG.backoff_factor,
     max_delay_ms: DEFAULT_RETRY_CONFIG.max_delay_ms,
     respect_retry_after: DEFAULT_RETRY_CONFIG.respect_retry_after,
     jitter: DEFAULT_RETRY_CONFIG.jitter,
+  }
+
+  function registerModelError(providerID: string, modelID: string, category: string, sessionID: string) {
+    const key = `${providerID}/${modelID}`
+    const now = Date.now()
+    const existing = modelHealthRegistry.get(key)
+    if (existing) {
+      existing.lastErrorTime = now
+      existing.errorCount++
+      existing.lastCategory = category
+      existing.sessions.add(sessionID)
+    } else {
+      if (modelHealthRegistry.size >= 100) {
+        const oldestKey = modelHealthRegistry.keys().next().value
+        if (oldestKey) modelHealthRegistry.delete(oldestKey)
+      }
+      modelHealthRegistry.set(key, {
+        lastErrorTime: now,
+        errorCount: 1,
+        lastCategory: category,
+        sessions: new Set([sessionID]),
+      })
+    }
+  }
+
+  function checkModelHealth(providerID: string, modelID: string): ModelHealthEntry | undefined {
+    const key = `${providerID}/${modelID}`
+    const entry = modelHealthRegistry.get(key)
+    if (!entry) return undefined
+    if (Date.now() - entry.lastErrorTime > REGISTRY_TTL) {
+      modelHealthRegistry.delete(key)
+      return undefined
+    }
+    return entry
+  }
+
+  function isModelHealthy(providerID: string, modelID: string): boolean {
+    const entry = checkModelHealth(providerID, modelID)
+    if (!entry) return true
+    return entry.errorCount < MAX_ERROR_COUNT
   }
 
   const handler = async ({
@@ -58,19 +109,37 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
         retryStates.delete(sessionID)
         fallbackAttempts.delete(sessionID)
         interruptingSessions.delete(sessionID)
+        // cleanup compound keys (sessionID:retryAttempt)
+        for (const [key] of interruptingSessions) {
+          if (key.startsWith(`${sessionID}:`)) {
+            interruptingSessions.delete(key)
+          }
+        }
+        for (const [key, entry] of modelHealthRegistry) {
+          entry.sessions.delete(sessionID)
+          if (entry.sessions.size === 0 && Date.now() - entry.lastErrorTime > REGISTRY_TTL) {
+            modelHealthRegistry.delete(key)
+          }
+        }
       }
       return false
     }
 
-    // handle session.error, message.updated, message.part.updated (RetryPart)
-    if (event.type !== "session.error" && event.type !== "message.updated" && event.type !== "message.part.updated") return false
+    // handle session.error, message.updated, message.part.updated (RetryPart), session.status (retry)
+    if (event.type !== "session.error" && event.type !== "message.updated" && event.type !== "message.part.updated" && event.type !== "session.status") return false
 
     const props = event.properties as Record<string, unknown> | undefined
     let sessionID: string | undefined
     let error: unknown
     let retryAttempt: number | undefined
 
-    if (event.type === "session.error") {
+    if (event.type === "session.status") {
+      const status = props?.status as { type?: string; message?: string; attempt?: number } | undefined
+      if (status?.type !== "retry") return false
+      sessionID = props?.sessionID as string | undefined
+      error = status.message ? { name: "RetryMessage", message: status.message } : undefined
+      retryAttempt = status.attempt
+    } else if (event.type === "session.error") {
       sessionID = props?.sessionID as string | undefined
       error = props?.error
     } else if (event.type === "message.updated") {
@@ -96,9 +165,10 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
     }
 
     // 2. Classify the error
-    const classification = classifyProviderError(error)
+    const classification = (error as { name?: string })?.name === "RetryMessage"
+      ? classifyTextMessage((error as { message: string }).message)
+      : classifyProviderError(error)
 
-    // DEBUG: 临时诊断日志，确认错误分类
     log("[runtime-fallback] DEBUG error classified", {
       category: classification.category,
       shouldFallback: classification.shouldFallback,
@@ -185,8 +255,22 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       log("[runtime-fallback] failed to read session messages", { sessionID, error: String(messageReadError) })
     }
 
+    if (currentModel.providerID && currentModel.modelID && sessionID) {
+      registerModelError(currentModel.providerID, currentModel.modelID, classification.category, sessionID)
+    }
+
     agent ??= "sisyphus"
-    const attempts = fallbackAttempts.get(sessionID) ?? []
+    let attempts = fallbackAttempts.get(sessionID) ?? []
+
+    // Record current model as a failed attempt so the chain never goes back to it
+    if (currentModel.providerID && currentModel.modelID) {
+      const currentKey = `${currentModel.providerID}/${currentModel.modelID}`
+      if (!attempts.some(a => `${a.model.providerID}/${a.model.modelID}` === currentKey)) {
+        attempts = [...attempts, { model: currentModel, error: classification }]
+        fallbackAttempts.set(sessionID, attempts)
+      }
+    }
+
     const fallbackResult = resolveNextFallbackModel({
       agent,
       category,
@@ -197,17 +281,56 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       lastErrorClassification: classification,
     })
 
+    log("[runtime-fallback] fallback resolution result", {
+      kind: fallbackResult.kind,
+      sessionID,
+      attemptsCount: attempts.length,
+      nextModel: fallbackResult.kind === "next"
+        ? `${fallbackResult.model.providerID}/${fallbackResult.model.modelID}`
+        : "N/A",
+      exhaustedReason: fallbackResult.kind !== "next" ? fallbackResult.reason : undefined,
+    })
+
     if (fallbackResult.kind !== "next") {
+      if (retryAttempt !== undefined) {
+        try {
+          await ctx.client.session.abort({ path: { id: sessionID } })
+          log("[runtime-fallback] aborted retry loop (fallback exhausted)", { sessionID })
+        } catch (abortErr) {
+          log("[runtime-fallback] abort failed during exhausted handling", {
+            sessionID, error: String(abortErr),
+          })
+        }
+      }
+      log("[runtime-fallback] fallback chain exhausted", {
+        sessionID, eventType: event.type,
+        attemptsCount: attempts.length,
+        reason: fallbackResult.kind === "exhausted" ? fallbackResult.reason : "unconfigured",
+      })
       return false
     }
 
-    // For RetryPart events: abort the ongoing retry loop first
-    const isRetryPartEvent = event.type === "message.part.updated" && retryAttempt !== undefined
-    if (isRetryPartEvent) {
-      if (interruptingSessions.get(sessionID)) {
+    if (!isModelHealthy(fallbackResult.model.providerID, fallbackResult.model.modelID)) {
+      log("[runtime-fallback] fallback model unhealthy, skipping", {
+        modelKey: `${fallbackResult.model.providerID}/${fallbackResult.model.modelID}`,
+        sessionID,
+      })
+      return false
+    }
+
+    // For retry-related events: abort the ongoing retry loop first
+    const needsRetryAbort = retryAttempt !== undefined
+    const guardKey = needsRetryAbort ? `${sessionID}:${retryAttempt}` : null
+    if (needsRetryAbort) {
+      if (guardKey && interruptingSessions.get(guardKey)) {
+        log("[runtime-fallback] re-entry guard: interrupting session, skipping", {
+          sessionID,
+          retryAttempt,
+          guardKey,
+        })
         return false
       }
-      interruptingSessions.set(sessionID, true)
+      if (guardKey) interruptingSessions.set(guardKey, true)
       try {
         await ctx.client.session.abort({ path: { id: sessionID } })
         log("[runtime-fallback] aborted retry loop", { sessionID, retryAttempt })
@@ -219,6 +342,10 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       }
     }
 
+    // Record the fallback model attempt BEFORE prompt so chain advances even if model also fails
+    const promptAttempts = [...attempts, { model: fallbackResult.model }]
+    fallbackAttempts.set(sessionID, promptAttempts)
+
     // 8. Inject fallback via session.prompt
     try {
       await ctx.client.session.prompt({
@@ -229,20 +356,42 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
         },
         query: { directory: ctx.directory },
       })
-      fallbackAttempts.delete(sessionID)
+      // 不清空 fallbackAttempts：session.prompt 成功只表示消息被队列，
+      // 异步模型调用可能仍然失败。清空会导致下次 retry 重复尝试同一模型，造成无限循环。
       return true
     } catch (fallbackError) {
-      fallbackAttempts.set(sessionID, [
-        ...attempts,
-        { model: fallbackResult.model, error: classifyProviderError(fallbackError) },
-      ])
-      return false
+      const currentAttempts = fallbackAttempts.get(sessionID) ?? []
+      const lastAttempt = currentAttempts[currentAttempts.length - 1]
+      const fallbackErrorClass = classifyProviderError(fallbackError)
+
+      log("[runtime-fallback] fallback prompt failed", {
+        sessionID,
+        errorCategory: fallbackErrorClass.category,
+        errorMessage: String(fallbackError).substring(0, 200),
+        fallbackModel: `${fallbackResult.model.providerID}/${fallbackResult.model.modelID}`,
+      })
+
+      if (lastAttempt && !lastAttempt.error) {
+        lastAttempt.error = fallbackErrorClass
+      }
+      // Register the fallback model's error only after it actually fails
+      if (sessionID) {
+        registerModelError(
+          fallbackResult.model.providerID,
+          fallbackResult.model.modelID,
+          fallbackErrorClass.category,
+          sessionID,
+        )
+      }
+      // 即使 prompt 失败也返回 true：已经 aborted retry，
+      // 返回 false 会让 OpenCode 继续 native retry，导致用户看到 "retrying in 53m 1s"
+      return true
     } finally {
-      if (isRetryPartEvent) {
-        interruptingSessions.delete(sessionID)
+      if (needsRetryAbort && guardKey) {
+        interruptingSessions.delete(guardKey)
       }
     }
   }
 
-  return { handler }
+  return { handler, checkModelHealth }
 }

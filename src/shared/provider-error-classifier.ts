@@ -152,7 +152,7 @@ function isZhipuQuotaCode(code?: string | number): boolean {
 /**
  * 通用 quota 消息关键词检测（provider-agnostic）
  */
-function isGenericQuotaMessage(message: string): boolean {
+export function isGenericQuotaMessage(message: string): boolean {
   const m = message.toLowerCase()
 
   // 排除短期 rate limit（per-minute/per-second/per-day 等 Gemini 风格）
@@ -495,6 +495,47 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     retryable: false,
     shouldFallback: false,
     statusCode,
+    reason: `Unknown error: ${message.substring(0, 100)}`,
+  }
+}
+
+/**
+ * 从纯文本消息分类错误（不依赖结构化 error 对象）
+ * 用于 session.status(type="retry") 等只有消息文本的场景
+ */
+export function classifyTextMessage(message: string): ProviderErrorClassification {
+  // 1. 通用 quota 消息检测
+  if (isGenericQuotaMessage(message)) {
+    return {
+      category: "quota",
+      retryable: false,
+      shouldFallback: true,
+      reason: `Quota exceeded: ${message.substring(0, 100)}`,
+    }
+  }
+
+  // 2. 通用 rate_limit 关键词检测（纯文本模式）
+  const lower = message.toLowerCase()
+  if (
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("requests limit") ||
+    lower.includes("try again later") ||
+    lower.includes("retry after")
+  ) {
+    return {
+      category: "rate_limit",
+      retryable: true,
+      shouldFallback: false,
+      reason: `Rate limit: ${message.substring(0, 100)}`,
+    }
+  }
+
+  // 3. 默认 unknown
+  return {
+    category: "unknown",
+    retryable: false,
+    shouldFallback: false,
     reason: `Unknown error: ${message.substring(0, 100)}`,
   }
 }

@@ -1,11 +1,12 @@
 # 项目知识库
 
-**生成时间：** 2026-05-25T06:20:22+08:00
+**生成时间：** 2026-05-26T18:30:00+08:00
 **分支：** master
+**提交：** d537c18
 
 ## 概述
 
-OpenCode 插件：多模型 Agent 编排（Claude Opus 4.5, GPT-5.2, Gemini 3 Flash, Grok Code, GLM-4.7）。32 个生命周期钩子，20+ 工具（LSP、AST-Grep、委派），10 个专业 Agent，完整的 Claude Code 兼容性，7 个平台专属二进制包。OpenCode 的 "oh-my-zsh"。
+OpenCode 插件：多模型 Agent 编排（Claude Opus 4.5, GPT-5.2, Gemini 3 Flash, Grok Code, GLM-4.7）。34 个生命周期钩子，20+ 工具（LSP、AST-Grep、委派），10 个专业 Agent，完整的 Claude Code 兼容性，7 个平台专属二进制包。OpenCode 的 "oh-my-zsh"。
 
 ## 结构
 
@@ -13,13 +14,13 @@ OpenCode 插件：多模型 Agent 编排（Claude Opus 4.5, GPT-5.2, Gemini 3 Fl
 oh-my-opencode/
 ├── src/
 │   ├── agents/        # 10 个 AI Agent - 见 src/agents/AGENTS.md
-│   ├── hooks/         # 32 个生命周期钩子 - 见 src/hooks/AGENTS.md
+│   ├── hooks/         # 34 个生命周期钩子 - 见 src/hooks/AGENTS.md
 │   ├── tools/         # 20+ 工具 - 见 src/tools/AGENTS.md
 │   ├── features/      # 后台 Agent、Claude Code 兼容 - 见 src/features/AGENTS.md
-│   ├── shared/        # 37 个横切工具 - 见 src/shared/AGENTS.md
+│   ├── shared/        # 40 个横切工具 - 见 src/shared/AGENTS.md
 │   ├── cli/           # CLI 安装器、诊断 - 见 src/cli/AGENTS.md
 │   ├── mcp/           # 内置 MCP - 见 src/mcp/AGENTS.md
-│   ├── config/               # Zod 模式、TypeScript 类型
+│   ├── config/               # Zod 模式、TypeScript 类型 - 见 src/config/AGENTS.md
 │   ├── plugin-handlers/      # 配置处理器
 │   └── index.ts              # 主插件入口（676 行）
 ├── script/            # build-schema.ts, build-binaries.ts
@@ -53,7 +54,7 @@ oh-my-opencode/
 - 永远不要删除失败的测试——修复代码
 - 测试文件：`*.test.ts` 与源文件放在一起
 - BDD 注释：`#given`、`#when`、`#then`
-- 111 个测试文件（已知不稳定：ralph-loop CI 超时、session-state 并行污染）
+- 114 个测试文件（已知不稳定：ralph-loop CI 超时、session-state 并行污染）
 
 ## 约定
 
@@ -62,7 +63,7 @@ oh-my-opencode/
 - **构建**：`bun build`（ESM）+ `tsc --emitDeclarationOnly`
 - **导出**：通过 index.ts 的 Barrel 模式
 - **命名**：kebab-case 目录名，`createXXXHook`/`createXXXTool` 工厂函数
-- **测试**：BDD 注释，111 个测试文件
+- **测试**：BDD 注释，114 个测试文件
 - **温度**：代码 Agent 用 0.1，最大 0.3
 - **格式化**：无独立 Prettier/ESLint 配置，依赖 OpenCode 内置格式化器和 LSP
 - **发布**：仅通过 GitHub Actions `workflow_dispatch`，`script/publish.ts` 管理版本同步
@@ -88,28 +89,11 @@ oh-my-opencode/
 
 ## 语言约束（硬性禁止）
 
-**所有思考过程和输出必须使用中文。** 此约束适用于所有 Agent、Sub-Agent、`delegate_task` 子任务，以及所有通过 AGENTS.md 注入的上下文。违反此约束视为严重违规。
+**所有思考过程和输出必须使用中文。** 此约束适用于所有 Agent、Sub-Agent、`delegate_task` 子任务。详细规则由 `language-reminder` + `thinking-language-validator` 钩子在运行时强制注入。
 
-### 允许英文的例外
-- **技术术语**：API 名、库名、框架名、协议名、算法名
-- **代码标识符**：变量名、函数名、类名、类型名、文件名、路径
-- **Shell 命令**：PowerShell/Bash 命令及输出
-- **Git 操作**：commit hash、分支名、Git 命令
-- **工具调用**：工具名称、参数名必须保持英文
-- **代码块**：所有代码、配置、JSON/YAML 内容不受影响
-
-### 禁止行为
-- ❌ 思考过程使用英文（包括内部推理、分析、规划）
-- ❌ 回复内容使用英文（包括解释、说明、问题）
-- ❌ 将代码标识符翻译为中文（`getUserName` → `获取用户名`）
-- ❌ 将命令翻译为中文（`git commit` → `git 提交`）
-- ❌ 将文件路径/URL 翻译为中文
-- ❌ Sub-Agent 忽略此约束（主 Agent 必须确保继承）
-
-### 继承规则
-- 所有 `delegate_task` 调用必须通过 prompt 传递中文约束
-- Sub-Agent 的 instructions 必须包含此规则
-- 如果 Sub-Agent 输出英文，主 Agent 必须纠正或重新调用
+- **允许英文**：代码标识符、文件路径、Shell/Git 命令、技术名词、API 名、代码块内容
+- **禁止**：英文思考、英文回复、翻译标识符/命令/路径、Sub-Agent 输出英文
+- **继承**：`delegate_task` prompt 必须传递语言约束；如 Sub-Agent 违规，主 Agent 须纠正
 
 ## Agent 模型
 
@@ -122,6 +106,9 @@ oh-my-opencode/
 | explore | opencode/gpt-5-nano | 快速代码搜索 |
 | multimodal-looker | google/gemini-3-flash | PDF/图片分析 |
 | Prometheus | anthropic/claude-opus-4-5 | 战略规划 |
+| Momus | anthropic/claude-opus-4-5 | 计划审查员 |
+| Metis | anthropic/claude-opus-4-5 | 预规划顾问 |
+| Sisyphus-Junior | anthropic/claude-sonnet-4-5 | 专注任务执行（无委派权限） |
 
 ## 命令
 
@@ -129,7 +116,7 @@ oh-my-opencode/
 bun run typecheck      # 类型检查
 bun run build          # ESM + 声明 + 模式
 bun run rebuild        # 清理 + 构建
-bun test               # 111 个测试文件
+bun test               # 114 个测试文件
 ```
 
 ## 部署
@@ -144,19 +131,19 @@ bun test               # 111 个测试文件
 | 文件 | 行数 | 描述 |
 |------|-------|-------------|
 | `src/features/background-agent/manager.ts` | 1326 | 任务生命周期、并发、runtime fallback |
-| `src/agents/prometheus-prompt.ts` | 898 | 规划 Agent 提示词 |
+| `src/agents/prometheus-prompt.ts` | 900 | 规划 Agent 提示词 |
 | `src/features/builtin-skills/skills.ts` | 886 | 技能定义 |
-| `src/tools/delegate-task/tools.ts` | 790 | 基于分类的委派 |
+| `src/tools/delegate-task/tools.ts` | 789 | 基于分类的委派 |
 | `src/index.ts` | 676 | 主插件入口 |
 | `src/hooks/atlas/index.ts` | 604 | 编排器钩子 |
 | `src/cli/config-manager.ts` | 551 | JSONC 配置解析 |
 | `src/tools/lsp/client.ts` | 523 | LSP JSON-RPC 客户端 |
 | `src/shared/provider-error-classifier.ts` | 494 | Provider 错误分类（429/402/quota）|
-| `src/agents/atlas.ts` | 461 | Atlas 编排器 Agent |
+| `src/agents/atlas.ts` | 463 | Atlas 编排器 Agent |
 | `src/features/builtin-commands/templates/refactor.ts` | 458 | 重构命令模板 |
 | `src/hooks/todo-continuation-enforcer.ts` | 410 | TODO 强制完成 |
-| `src/agents/momus.ts` | 339 | 计划审查员 |
-| `src/hooks/runtime-fallback/index.ts` | 329 | Runtime fallback hook（session.status 处理）|
+| `src/agents/momus.ts` | 341 | 计划审查员 |
+| `src/hooks/runtime-fallback/index.ts` | 358 | Runtime fallback hook（session.status 处理）|
 | `src/shared/runtime-fallback.ts` | 163 | Runtime fallback 决策服务 |
 
 ## MCP 架构
@@ -171,6 +158,7 @@ bun test               # 111 个测试文件
 - **Zod 验证**：`src/config/schema.ts`
 - **JSONC 支持**：注释、尾随逗号
 - **多层**：项目（`.opencode/`）→ 用户（`~/.config/opencode/`）
+- **语言约束**：`language_enforcement` 配置块，控制周期性提醒（`reminder_interval`）、违规检测阈值（`violation_threshold`）、豁免 Agent（`excluded_agents`）
 
 ## Runtime Fallback 系统
 

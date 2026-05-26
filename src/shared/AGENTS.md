@@ -2,7 +2,7 @@
 
 ## 概述
 
-37 个横切工具：路径解析、token 截断、配置解析、模型解析、Agent 显示名称、provider 错误分类、retry 策略、runtime fallback。
+40 个横切工具：路径解析、token 截断、配置解析、模型解析、Agent 显示名称、provider 错误分类、retry 策略、runtime fallback。
 
 ## 结构
 
@@ -27,17 +27,23 @@ shared/
 ├── agent-display-names.ts # Agent 显示名称映射
 ├── agent-tool-restrictions.ts # 工具限制辅助函数
 ├── agent-variant.ts       # Agent 变体检测
+├── case-insensitive.ts    # 大小写不敏感匹配
 ├── command-executor.ts    # 子进程执行
 ├── config-errors.ts       # 配置错误类型
 ├── deep-merge.ts          # 深度对象合并
 ├── file-reference-resolver.ts # 文件路径解析
 ├── file-utils.ts          # 文件工具
+├── fileio-monitor.ts      # 文件 I/O 监控
+├── first-message-variant.ts # 首条消息变体
 ├── hook-disabled.ts       # 钩子启用/禁用检查
 ├── pattern-matcher.ts     # Glob 模式匹配
+├── perf-timer.ts          # 性能计时工具
+├── perf-tracer.ts         # 性能追踪工具
 ├── session-cursor.ts      # 会话光标跟踪
 ├── snake-case.ts          # 字符串大小写转换
 ├── system-directive.ts    # 系统提示辅助函数
 ├── tool-name.ts           # 工具名称常量
+├── windows-reserved-names.ts # Windows 保留文件名检查
 ├── zip-extractor.ts       # ZIP 文件提取
 ├── provider-error-classifier.ts # Provider 错误分类（429/402/quota）
 ├── retry-strategy.ts      # Retry/backoff 策略

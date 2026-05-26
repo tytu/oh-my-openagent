@@ -2,7 +2,7 @@
 
 ## 概述
 
-32 个生命周期钩子，拦截/修改 Agent 行为。事件类型：PreToolUse、PostToolUse、UserPromptSubmit、Stop、onSummarize。
+34 个生命周期钩子，拦截/修改 Agent 行为。事件类型：PreToolUse、PostToolUse、UserPromptSubmit、Stop、onSummarize。
 
 ## 结构
 
@@ -30,6 +30,8 @@ hooks/
 ├── auto-update-checker/        # 插件更新检查
 ├── tool-output-truncator.ts    # 防止上下文膨胀
 ├── compaction-context-injector/ # 压缩时注入上下文
+├── language-reminder/           # 周期性中文提醒（每 N 次工具调用注入）
+├── thinking-language-validator/ # thinking 块语言检测 + 纠正
 ├── delegate-task-retry/        # 重试失败的委派
 ├── runtime-fallback/           # Provider 错误自动 fallback（429/402/quota）
 ├── interactive-bash-session/   # Tmux 会话管理
@@ -58,7 +60,7 @@ hooks/
 
 **tool.execute.before**：claudeCodeHooks → nonInteractiveEnv → commentChecker → directoryAgentsInjector → rulesInjector
 
-**tool.execute.after**：editErrorRecovery → delegateTaskRetry → commentChecker → toolOutputTruncator → claudeCodeHooks
+**tool.execute.after**：editErrorRecovery → delegateTaskRetry → commentChecker → toolOutputTruncator → agentUsageReminder → languageReminder → thinkingLanguageValidator → claudeCodeHooks
 
 ## 如何添加
 

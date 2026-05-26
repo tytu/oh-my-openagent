@@ -17,6 +17,7 @@ import { resolveModelWithFallback } from "../../shared/model-resolver"
 import { CATEGORY_MODEL_REQUIREMENTS } from "../../shared/model-requirements"
 import { classifyProviderError } from "../../shared/provider-error-classifier"
 import { resolveNextFallbackModel, type FallbackAttempt, type FallbackModel } from "../../shared/runtime-fallback"
+import { ZH_SUB_AGENT_INSTRUCTION } from "../../agents/utils"
 
 type OpencodeClient = PluginInput["client"]
 
@@ -171,18 +172,13 @@ export interface BuildSystemContentInput {
   categoryPromptAppend?: string
 }
 
-export function buildSystemContent(input: BuildSystemContentInput): string | undefined {
+export function buildSystemContent(input: BuildSystemContentInput): string {
   const { skillContent, categoryPromptAppend } = input
-
-  if (!skillContent && !categoryPromptAppend) {
-    return undefined
-  }
-
-  if (skillContent && categoryPromptAppend) {
-    return `${skillContent}\n\n${categoryPromptAppend}`
-  }
-
-  return skillContent || categoryPromptAppend
+  const parts: string[] = []
+  if (skillContent) parts.push(skillContent)
+  if (categoryPromptAppend) parts.push(categoryPromptAppend)
+  parts.push(ZH_SUB_AGENT_INSTRUCTION)
+  return parts.join("\n\n")
 }
 
 export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefinition {
@@ -228,10 +224,10 @@ Prompts 必须为中文。`
   return tool({
     description,
     args: {
-      load_skills: tool.schema.array(tool.schema.string()).describe("要注入的 Skill 名称。必填 — 如无需 skills 传入 []，但强烈建议传入正确的 skills 如 [\"playwright\"]、[\"git-master\"] 以获得最佳效果。"),
+      load_skills: tool.schema.array(tool.schema.string()).optional().describe("要注入的 Skill 名称。如无需 skills 传入 []（未提供时默认为 []），但强烈建议传入正确的 skills 如 [\"playwright\"]、[\"git-master\"] 以获得最佳效果。"),
       description: tool.schema.string().describe("任务简短描述（3-5 个词）"),
       prompt: tool.schema.string().describe("agent 的完整详细 prompt"),
-      run_in_background: tool.schema.boolean().describe("true=异步（返回 task_id），false=同步（等待）。默认值: false"),
+      run_in_background: tool.schema.boolean().optional().describe("true=异步（返回 task_id），false=同步（等待结果）。未提供时默认为 false。仅在并行探索 5+ 个独立查询时使用 true。"),
       category: tool.schema.string().optional().describe(`分类（例如 ${categoryExamples}）。与 subagent_type 互斥。`),
       subagent_type: tool.schema.string().optional().describe("Agent 名称（例如 'oracle'、'explore'）。与 category 互斥。"),
       session_id: tool.schema.string().optional().describe("要继续的现有 Task session"),
@@ -239,15 +235,8 @@ Prompts 必须为中文。`
     },
     async execute(args: DelegateTaskArgs, toolContext) {
       const ctx = toolContext as ToolContextWithMetadata
-      if (args.run_in_background === undefined) {
-        throw new Error(`参数错误：'run_in_background' 参数必填。任务委托使用 run_in_background=false，仅在并行探索时使用 run_in_background=true。`)
-      }
-      if (args.load_skills === undefined) {
-        throw new Error(`参数错误：'load_skills' 参数必填。如无需 skills 传入 []，但强烈建议传入正确的 skills 如 ["playwright"]、["git-master"] 以获得最佳效果。`)
-      }
-      if (args.load_skills === null) {
-        throw new Error(`参数错误：不允许 load_skills=null。如无需 skills 传入 []，但强烈建议传入正确的 skills。`)
-      }
+      args.run_in_background ??= false
+      args.load_skills ??= []
       const runInBackground = args.run_in_background === true
 
       let skillContent: string | undefined

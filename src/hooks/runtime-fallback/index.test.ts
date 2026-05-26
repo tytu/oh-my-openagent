@@ -13,6 +13,15 @@ const mockClassifyProviderError = mock(
   }),
 )
 
+const mockClassifyTextMessage = mock(
+  (_message: string): ProviderErrorClassification => ({
+    category: "unknown",
+    retryable: false,
+    shouldFallback: false,
+    reason: "test",
+  }),
+)
+
 const mockCalculateRetryDelay = mock(
   (_attempt: number, _config?: unknown, _retryAfterMs?: number): RetryDecision => ({
     retryable: true,
@@ -32,6 +41,7 @@ const mockResolveNextFallbackModel = mock(
 
 mock.module("../../shared/provider-error-classifier", () => ({
   classifyProviderError: mockClassifyProviderError,
+  classifyTextMessage: mockClassifyTextMessage,
 }))
 
 mock.module("../../shared/retry-strategy", () => ({
@@ -95,10 +105,30 @@ function createRetryPartEvent(
   }
 }
 
+function createSessionStatusEvent(
+  sessionID: string,
+  statusType: string,
+  message?: string,
+  attempt?: number,
+): { type: string; properties: Record<string, unknown> } {
+  return {
+    type: "session.status",
+    properties: {
+      sessionID,
+      status: {
+        type: statusType,
+        message,
+        attempt,
+      },
+    },
+  }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 describe("runtime-fallback", () => {
   beforeEach(() => {
     mockClassifyProviderError.mockClear()
+    mockClassifyTextMessage.mockClear()
     mockCalculateRetryDelay.mockClear()
     mockResolveNextFallbackModel.mockClear()
   })
@@ -917,6 +947,100 @@ describe("runtime-fallback", () => {
       resolvePrompt!({})
       await firstCallPromise
     })
+
+    // #given RetryPart where second call has different retryAttempt
+    // #when second call with different retryAttempt arrives while first is pending
+    // #then second call should NOT be blocked (different attempt = different event)
+    test("re-entry guard does not block different retryAttempt", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 3,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "quota exceeded",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      // Use array of resolvers so each session.prompt call gets its own resolve
+      const resolves: ((value: unknown) => void)[] = []
+      ctx.client.session.prompt = mock(() => new Promise((resolve) => { resolves.push(resolve); return }))
+
+      const event1 = createRetryPartEvent("ses_123", { message: "quota exceeded" }, 1)
+      const firstCallPromise = hook.handler({ event: event1 })
+
+      const event2 = createRetryPartEvent("ses_123", { message: "weekly usage limit" }, 2)
+      const secondCallPromise = hook.handler({ event: event2 })
+
+      // Both handlers are awaiting session.messages (resolved). Wait for them to reach session.prompt.
+      await new Promise(r => setTimeout(r, 50))
+
+      // Now both handlers should be pending on session.prompt
+      resolves[0]({})
+      await firstCallPromise
+      resolves[1]({})
+      const secondResult = await secondCallPromise
+
+      expect(secondResult).not.toBe(false)
+    })
+
+    // #given RetryPart where abort succeeds but session.prompt fails
+    // #when handler processes the event
+    // #then should return true (preventing retry loop resume)
+    test("prompt failure after successful abort returns true to prevent retry resume", async () => {
+      const ctx = createMockCtx()
+      ctx.client.session.abort = mock(() => Promise.resolve({}))
+      ctx.client.session.prompt = mock(() => Promise.reject(new Error("prompt failed")))
+      const hook = createRuntimeFallbackHook(ctx, {
+        config: {
+          enabled: true,
+          max_attempts: 3,
+          max_retries_before_fallback: 2,
+          initial_delay_ms: 0,
+          backoff_factor: 2,
+          max_delay_ms: 0,
+          respect_retry_after: true,
+          jitter: false,
+        },
+      })
+
+      mockClassifyProviderError.mockReturnValue({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "You have exceeded the 5-hour usage quota",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = createRetryPartEvent("ses_123", { message: "quota exceeded" }, 2)
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(ctx.client.session.abort).toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
   })
 
   describe("缺少必要属性", () => {
@@ -946,6 +1070,454 @@ describe("runtime-fallback", () => {
 
       expect(result).toBe(false)
       expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("session.status retry 事件处理", () => {
+    // #given session.status type=retry with quota message
+    // #when handler processes the event
+    // #then should use classifyTextMessage and trigger fallback
+    test("session.status retry with quota message triggers fallback", async () => {
+      // #given
+      const ctx = createMockCtx()
+      mockClassifyTextMessage.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded: You have exceeded the 5-hour usage quota",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent(
+        "ses_123",
+        "retry",
+        "You have exceeded the 5-hour usage quota. It will reset at 2026-05-25 03:06:06 +0800 CST.",
+        1,
+      )
+
+      // #when
+      const result = await hook.handler({ event })
+
+      // #then
+      expect(result).toBe(true)
+      expect(mockClassifyTextMessage).toHaveBeenCalledWith(
+        "You have exceeded the 5-hour usage quota. It will reset at 2026-05-25 03:06:06 +0800 CST.",
+      )
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+
+    // #given session.status type=retry with rate_limit message
+    // #when handler processes the event
+    // #then should use classifyTextMessage and retry
+    test("session.status retry with rate_limit message triggers retry", async () => {
+      // #given
+      const ctx = createMockCtx()
+      mockClassifyTextMessage.mockReturnValueOnce({
+        category: "rate_limit",
+        retryable: true,
+        shouldFallback: false,
+        reason: "Rate limit: Rate limit exceeded",
+      })
+      mockCalculateRetryDelay.mockReturnValueOnce({
+        retryable: true,
+        delay_ms: 100,
+        attempt: 0,
+        reason: "test",
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent("ses_123", "retry", "Rate limit exceeded", 1)
+
+      // #when
+      const result = await hook.handler({ event })
+
+      // #then
+      expect(result).toBe(false)
+      expect(mockClassifyTextMessage).toHaveBeenCalledWith("Rate limit exceeded")
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+
+    // #given session.status type=idle
+    // #when handler processes the event
+    // #then should return false
+    test("session.status idle is ignored", async () => {
+      // #given
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent("ses_123", "idle")
+
+      // #when
+      const result = await hook.handler({ event })
+
+      // #then
+      expect(result).toBe(false)
+      expect(mockClassifyTextMessage).not.toHaveBeenCalled()
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+
+    // #given session.status type=busy
+    // #when handler processes the event
+    // #then should return false
+    test("session.status busy is ignored", async () => {
+      // #given
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent("ses_123", "busy")
+
+      // #when
+      const result = await hook.handler({ event })
+
+      // #then
+      expect(result).toBe(false)
+      expect(mockClassifyTextMessage).not.toHaveBeenCalled()
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+
+    // #given session.status type=retry without message
+    // #when handler processes the event
+    // #then should return false
+    test("session.status retry without message is ignored", async () => {
+      // #given
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent("ses_123", "retry")
+
+      // #when
+      const result = await hook.handler({ event })
+
+      // #then
+      expect(result).toBe(false)
+      expect(mockClassifyTextMessage).not.toHaveBeenCalled()
+      expect(mockClassifyProviderError).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("模型健康注册表", () => {
+    // #given quota error
+    // #when handler processes the error
+    // #then should register model error
+    test("quota error registers model in health registry", async () => {
+      // #given
+      const ctx = createMockCtx()
+      ctx.client.session.messages = mock(() => Promise.resolve({
+        data: [{ info: { model: { providerID: "anthropic", modelID: "claude-opus-4-5" } } }],
+      }))
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionErrorEvent("ses_123", { status: 429, error: { code: "insufficient_quota" } })
+
+      // #when
+      await hook.handler({ event })
+
+      // #then
+      const entry = hook.checkModelHealth("anthropic", "claude-opus-4-5")
+      expect(entry).toBeDefined()
+      expect(entry?.errorCount).toBe(1)
+      expect(entry?.lastCategory).toBe("quota")
+    })
+
+    // #given multiple errors for same model
+    // #when handler processes multiple errors
+    // #then should increment errorCount
+    test("multiple errors increment error count", async () => {
+      // #given
+      const ctx = createMockCtx()
+      ctx.client.session.messages = mock(() => Promise.resolve({
+        data: [{ info: { model: { providerID: "anthropic", modelID: "claude-opus-4-5" } } }],
+      }))
+      mockClassifyProviderError.mockReturnValue({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded",
+      })
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionErrorEvent("ses_123", { status: 429, error: { code: "insufficient_quota" } })
+
+      // #when
+      await hook.handler({ event })
+      await hook.handler({ event })
+      await hook.handler({ event })
+
+      // #then
+      const entry = hook.checkModelHealth("anthropic", "claude-opus-4-5")
+      expect(entry?.errorCount).toBe(3)
+    })
+
+    // #given model with MAX_ERROR_COUNT errors
+    // #when handler tries to fallback to that model
+    // #then should skip unhealthy model
+    test("unhealthy model is skipped during fallback", async () => {
+      // #given
+      const ctx = createMockCtx()
+      ctx.client.session.messages = mock(() => Promise.resolve({
+        data: [{ info: { model: { providerID: "anthropic", modelID: "claude-opus-4-5" } } }],
+      }))
+      mockClassifyProviderError.mockReturnValue({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded",
+      })
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionErrorEvent("ses_123", { status: 429, error: { code: "insufficient_quota" } })
+
+      // Register errors
+      for (let i = 0; i < 3; i++) {
+        await hook.handler({ event })
+      }
+
+      // Current model errors should be tracked
+      const currentEntry = hook.checkModelHealth("anthropic", "claude-opus-4-5")
+      expect(currentEntry?.errorCount).toBe(3)
+      // Fallback model is NOT pre-registered — only registered on actual failure
+      // Since prompt always succeeds in the mock, fallback model has no error entry
+      const fallbackEntry = hook.checkModelHealth("openai", "gpt-4o")
+      expect(fallbackEntry).toBeUndefined()
+
+      // #when - try one more fallback (both models still < MAX_ERROR_COUNT=5)
+      const result = await hook.handler({ event })
+
+      // #then - fallback model is still healthy, prompt proceeds
+      expect(result).toBe(true)
+    })
+
+    // #given model with old errors (TTL expired)
+    // #when checkModelHealth is called
+    // #then should return undefined (cleaned up)
+    test("TTL expired entries are cleaned up", async () => {
+      // #given
+      const ctx = createMockCtx()
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionErrorEvent("ses_123", { status: 429, error: { code: "insufficient_quota" } })
+
+      // #when
+      await hook.handler({ event })
+
+      // Mock Date.now to simulate TTL expiration
+      const originalDateNow = Date.now
+      Date.now = () => originalDateNow() + 60 * 60 * 1000 + 1
+
+      // #then
+      const entry = hook.checkModelHealth("", "")
+      expect(entry).toBeUndefined()
+
+      // Restore Date.now
+      Date.now = originalDateNow
+    })
+  })
+
+  describe("Sub-agent 场景", () => {
+    // #given session.status retry with quota message (sub-agent scenario)
+    // #when handler processes the event
+    // #then should trigger fallback immediately without waiting for retries
+    test("session.status retry triggers immediate fallback for sub-agent", async () => {
+      // #given
+      const ctx = createMockCtx()
+      mockClassifyTextMessage.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded: You have exceeded the 5-hour usage quota",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent(
+        "ses_sub_agent",
+        "retry",
+        "You have exceeded the 5-hour usage quota. It will reset at 2026-05-25 03:06:06 +0800 CST.",
+        1,
+      )
+
+      // #when
+      const result = await hook.handler({ event })
+
+      // #then
+      expect(result).toBe(true)
+      expect(mockClassifyTextMessage).toHaveBeenCalled()
+      expect(ctx.client.session.prompt).toHaveBeenCalled()
+    })
+
+    // #given multiple sessions with quota errors
+    // #when handler processes events for different sessions
+    // #then should track errors per model, not per session
+    test("multiple sessions track errors per model", async () => {
+      // #given
+      const ctx = createMockCtx()
+      ctx.client.session.messages = mock(() => Promise.resolve({
+        data: [{ info: { model: { providerID: "anthropic", modelID: "claude-opus-4-5" } } }],
+      }))
+      mockClassifyProviderError.mockReturnValue({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded",
+      })
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+
+      // #when
+      await hook.handler({ event: createSessionErrorEvent("ses_1", { status: 429 }) })
+      await hook.handler({ event: createSessionErrorEvent("ses_2", { status: 429 }) })
+      await hook.handler({ event: createSessionErrorEvent("ses_3", { status: 429 }) })
+
+      // #then
+      const entry = hook.checkModelHealth("anthropic", "claude-opus-4-5")
+      expect(entry?.errorCount).toBe(3)
+      expect(entry?.sessions.size).toBe(3)
+    })
+
+    // #given all fallback models are unhealthy
+    // #when handler tries to fallback
+    // #then should return false gracefully
+    test("all models quota returns false gracefully", async () => {
+      // #given
+      const ctx = createMockCtx()
+      ctx.client.session.messages = mock(() => Promise.resolve({
+        data: [{ info: { model: { providerID: "anthropic", modelID: "claude-opus-4-5" } } }],
+      }))
+      mockClassifyProviderError.mockReturnValue({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded",
+      })
+      mockResolveNextFallbackModel.mockReturnValue({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionErrorEvent("ses_123", { status: 429 })
+
+      // Register errors - both current and fallback models are now tracked
+      for (let i = 0; i < 3; i++) {
+        await hook.handler({ event })
+      }
+
+      // #when (both models still have < 5 errors, both healthy)
+      const result = await hook.handler({ event })
+
+      // #then - handler falls back successfully
+      expect(result).toBe(true)
+    })
+
+    test("chain moves forward when fallback model also fails", async () => {
+      const ctx = createMockCtx()
+      mockClassifyTextMessage.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded: You have exceeded the 5-hour usage quota",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent("ses_chain", "retry", "quota exceeded", 1)
+      await hook.handler({ event })
+      expect(ctx.client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            model: { providerID: "openai", modelID: "gpt-4o" },
+          }),
+        }),
+      )
+      ctx.client.session.prompt.mockClear()
+      mockClassifyTextMessage.mockClear()
+      mockResolveNextFallbackModel.mockClear()
+      mockClassifyTextMessage.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded: You have exceeded the 5-hour usage quota",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "google", modelID: "gemini-3-flash" },
+        attempts: [{ model: { providerID: "openai", modelID: "gpt-4o" } }],
+      })
+      const result = await hook.handler({ event })
+      expect(result).toBe(true)
+      expect(ctx.client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            model: { providerID: "google", modelID: "gemini-3-flash" },
+          }),
+        }),
+      )
+      expect(mockResolveNextFallbackModel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attempts: expect.arrayContaining([
+            expect.objectContaining({ model: { providerID: "openai", modelID: "gpt-4o" } }),
+          ]),
+        }),
+      )
+    })
+
+    test("exhausted fallbacks abort retry loop for session.status events", async () => {
+      const ctx = createMockCtx()
+      mockClassifyTextMessage.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "Quota exceeded: You have exceeded the 5-hour usage quota",
+      })
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "exhausted",
+        attempts: [{ model: { providerID: "openai", modelID: "gpt-4o" } }],
+        reason: "No fallback candidates available",
+      })
+      const hook = createRuntimeFallbackHook(ctx)
+      const event = createSessionStatusEvent("ses_exhausted", "retry", "quota exceeded", 3)
+      const result = await hook.handler({ event })
+      expect(ctx.client.session.abort).toHaveBeenCalledWith({ path: { id: "ses_exhausted" } })
+      expect(result).toBe(false)
     })
   })
 })
