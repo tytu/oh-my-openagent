@@ -181,6 +181,33 @@ export function buildSystemContent(input: BuildSystemContentInput): string {
   return parts.join("\n\n")
 }
 
+async function pollTaskCompletion(
+  client: OpencodeClient,
+  sessionID: string,
+  maxWaitMs = 120000,
+  pollIntervalMs = 2000,
+): Promise<string> {
+  const startTime = Date.now()
+  while (Date.now() - startTime < maxWaitMs) {
+    const statusResult = await client.session?.status()
+    const sessionStatus = statusResult?.data?.[sessionID]
+    if (sessionStatus?.type === "idle") {
+      const messagesResult = await client.session?.messages({ path: { id: sessionID } })
+      const messages = messagesResult?.data
+      if (messages && messages.length > 0) {
+        const lastMsg = messages[messages.length - 1]
+        const textParts = lastMsg.parts?.filter((p: any) => p.type === "text")
+        if (textParts && textParts.length > 0) {
+          return textParts.map((p: any) => p.text).join("\n")
+        }
+      }
+      return "Task completed (no output)"
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+  }
+  return "Task timed out"
+}
+
 export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefinition {
   const { manager, client, directory, userCategories, gitMasterConfig, sisyphusJuniorModel, runtimeFallbackConfig, agentFallbackModels } = options
 
@@ -238,6 +265,7 @@ Prompts 必须为中文。`
       args.run_in_background ??= false
       args.load_skills ??= []
       const runInBackground = args.run_in_background === true
+      let isUnstableAgent = false
 
       let skillContent: string | undefined
       if (args.load_skills.length > 0) {
@@ -510,6 +538,11 @@ ${textContent || "(无文本输出)"}
             return `未知的分类：${args.category}。可用的分类：${categoryExamples}`
           }
 
+          const modelLower = resolved.model.toLowerCase()
+          const isGeminiModel = modelLower.startsWith("google/")
+          const isExplicitlyUnstable = resolved.config.is_unstable_agent === true
+          isUnstableAgent = isGeminiModel || isExplicitlyUnstable
+
           agentToUse = SISYPHUS_JUNIOR_AGENT
           const parsed = parseModelString(resolved.model)
           categoryModel = parsed
@@ -569,7 +602,10 @@ ${textContent || "(无文本输出)"}
 
       const systemContent = buildSystemContent({ skillContent, categoryPromptAppend })
 
-      if (runInBackground) {
+      // Force background mode for unstable agents, but wait for result
+      const effectiveRunInBackground = runInBackground || isUnstableAgent
+
+      if (effectiveRunInBackground) {
         try {
           const task = await manager.launch({
             description: args.description,
@@ -584,6 +620,12 @@ ${textContent || "(无文本输出)"}
             skills: args.load_skills.length > 0 ? args.load_skills : undefined,
             skillContent: systemContent,
           })
+
+          // For unstable agents forced to background, wait for result
+          if (isUnstableAgent && !runInBackground && task.sessionID) {
+            const supervisedResult = await pollTaskCompletion(client, task.sessionID)
+            return `SUPERVISED TASK COMPLETED\n\n${supervisedResult}`
+          }
 
           ctx.metadata?.({
             title: args.description,
