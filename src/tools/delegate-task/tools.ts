@@ -511,7 +511,10 @@ ${textContent || "(无文本输出)"}
           }
 
           agentToUse = SISYPHUS_JUNIOR_AGENT
-          categoryModel = parseModelString(resolved.model)
+          const parsed = parseModelString(resolved.model)
+          categoryModel = parsed
+            ? { providerID: parsed.providerID, modelID: parsed.modelID, variant: resolved.config.variant }
+            : undefined
           categoryPromptAppend = resolved.promptAppend
 
           modelInfo = {
