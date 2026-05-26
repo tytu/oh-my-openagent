@@ -15,6 +15,7 @@ import {
   loadInjectedRules,
   saveInjectedRules,
 } from "./storage";
+import { injectHookMessage } from "../../features/hook-message-injector"
 import { createDynamicTruncator } from "../../shared/dynamic-truncator";
 
 interface ToolExecuteInput {
@@ -132,13 +133,16 @@ export function createRulesInjectorHook(ctx: PluginInput) {
 
     toInject.sort((a, b) => a.distance - b.distance);
 
+    const ruleParts: string[] = []
     for (const rule of toInject) {
       const { result, truncated } = await truncator.truncate(sessionID, rule.content);
       const truncationNotice = truncated
         ? `\n\n[注意：为节省上下文窗口空间，内容已截断。完整内容请直接读取文件：${rule.relativePath}]`
         : "";
-      output.output += `\n\n[Rule: ${rule.relativePath}]\n[Match: ${rule.matchReason}]\n${result}${truncationNotice}`;
+      ruleParts.push(`[Rule: ${rule.relativePath}]\n[Match: ${rule.matchReason}]\n${result}${truncationNotice}`)
     }
+    const combinedContent = ruleParts.join("\n\n")
+    injectHookMessage(sessionID, combinedContent, {})
 
     saveInjectedRules(sessionID, cache);
   }
