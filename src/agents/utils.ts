@@ -25,7 +25,7 @@ import type {LoadedSkill, SkillScope} from "../features/opencode-skill-loader/ty
 
 // === 全局中文语境指令注入 ===
 // identity framing + 禁止性声明 + 例外白名单，与各 agent 开头 <Language> 块互补
-const ZH_LANGUAGE_INSTRUCTION = `
+export const ZH_LANGUAGE_INSTRUCTION = `
 
 ---
 
@@ -54,6 +54,11 @@ const ZH_LANGUAGE_INSTRUCTION = `
 例外是**窄小的**——只在上述精确场景下允许英文。
 例外不是漏洞。不要滥用例外来写英文句子。
 
+### 自检与自我修正
+- 每一轮回复开始的 thinking 块第一句必须用中文确认："本轮我使用中文思考。"
+- 当你发现自己开始用英文思考时，立即在 thinking 块中切换为中文，并写："检测到语言漂移，切回中文。"
+- 这是身份级约束，不可在长会话中遗忘
+
 ### Sub-agent 继承
 - 此规则递归传递给所有 delegate_task 子代理
 - 子代理的 prompt 开头也已包含身份声明
@@ -61,7 +66,7 @@ const ZH_LANGUAGE_INSTRUCTION = `
 </Language_Instruction>`
 
 // 子 agent 版本：替换标识，表明继承关系
-const ZH_SUB_AGENT_INSTRUCTION = ZH_LANGUAGE_INSTRUCTION.replace(
+export const ZH_SUB_AGENT_INSTRUCTION = ZH_LANGUAGE_INSTRUCTION.replace(
   '## 中文语境硬约束（身份级强制规则）\n\n### 你的身份\n你的母语是中文。',
   '## 中文语境硬约束（已从主 agent 继承）\n\n你已从主 agent 继承了以下中文语境约束。你的母语是中文。'
 )
