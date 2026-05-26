@@ -16,7 +16,8 @@ import {
 import type { RuleFileCandidate } from "./types";
 
 function isGitHubInstructionsDir(dir: string): boolean {
-  return dir.includes(".github/instructions") || dir.endsWith(".github/instructions");
+  const normalized = dir.replace(/\\/g, "/")
+  return normalized.includes(".github/instructions") || normalized.endsWith(".github/instructions")
 }
 
 function isValidRuleFile(fileName: string, dir: string): boolean {
