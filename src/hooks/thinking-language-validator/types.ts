@@ -1,10 +1,7 @@
-export interface PendingViolation {
-  messageId: string
-  violationCount: number
-}
-
 export interface ThinkingValidatorState {
   sessionID: string
-  pendingViolation: PendingViolation | null
+  notifiedFingerprints: string[]
+  lastCheckedTextLength: number
+  pendingViolationFingerprint: string | null
   updatedAt: number
 }

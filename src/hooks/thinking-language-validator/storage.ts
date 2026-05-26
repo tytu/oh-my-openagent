@@ -18,7 +18,17 @@ export function loadThinkingValidatorState(sessionID: string): ThinkingValidator
   if (!existsSync(filePath)) return null
   try {
     const content = readFileSync(filePath, "utf-8")
-    return JSON.parse(content) as ThinkingValidatorState
+    const parsed = JSON.parse(content) as Record<string, unknown>
+
+    const state: ThinkingValidatorState = {
+      sessionID: (parsed.sessionID as string) ?? sessionID,
+      notifiedFingerprints: Array.isArray(parsed.notifiedFingerprints) ? parsed.notifiedFingerprints.slice(0, 100) : [],
+      lastCheckedTextLength: typeof parsed.lastCheckedTextLength === "number" ? parsed.lastCheckedTextLength : 0,
+      pendingViolationFingerprint: typeof parsed.pendingViolationFingerprint === "string" ? parsed.pendingViolationFingerprint : null,
+      updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
+    }
+
+    return state
   } catch {
     return null
   }

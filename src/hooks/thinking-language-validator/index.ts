@@ -38,10 +38,13 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
   function getOrCreateState(sessionID: string): ThinkingValidatorState {
     if (!sessionStates.has(sessionID)) {
       const persisted = loadThinkingValidatorState(sessionID)
-      const state: ThinkingValidatorState = persisted ?? {
+      const state: ThinkingValidatorState = {
         sessionID,
-        pendingViolation: null,
+        notifiedFingerprints: [],
+        lastCheckedTextLength: 0,
+        pendingViolationFingerprint: null,
         updatedAt: Date.now(),
+        ...persisted,
       }
       sessionStates.set(sessionID, state)
     }
@@ -53,6 +56,12 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
     clearThinkingValidatorState(sessionID)
   }
 
+  function computeFingerprint(text: string): string {
+    const hasher = new Bun.CryptoHasher("sha256")
+    hasher.update(text)
+    return hasher.digest("hex").slice(0, 16)
+  }
+
   const toolExecuteAfter = async (
     input: ToolExecuteInput,
     output: ToolExecuteOutput
@@ -60,9 +69,13 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
     const { sessionID } = input
     const state = getOrCreateState(sessionID)
 
-    if (state.pendingViolation && state.pendingViolation.violationCount === 0) {
+    if (state.pendingViolationFingerprint) {
       output.output += THINKING_VIOLATION_REMINDER
-      state.pendingViolation.violationCount = 1
+      state.notifiedFingerprints.push(state.pendingViolationFingerprint)
+      if (state.notifiedFingerprints.length > 100) {
+        state.notifiedFingerprints.shift()
+      }
+      state.pendingViolationFingerprint = null
       state.updatedAt = Date.now()
       saveThinkingValidatorState(state)
     }
@@ -86,27 +99,39 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
       }
     }
 
-    if (event.type === "message.updated") {
-      const message = props?.message as Record<string, any> | undefined
-      const sessionID = props?.sessionID as string | undefined
-      if (!message || !sessionID) return
+    if (event.type === "message.part.updated") {
+      const info = props?.info as Record<string, unknown> | undefined
+      const sessionID = info?.sessionID as string | undefined
+      const role = info?.role as string | undefined
 
-      const agent = message.agent as string | undefined
+      if (!sessionID || role !== "assistant") return
+
+      const agent = info?.agent as string | undefined
       if (agent && excludedAgents.includes(agent.toLowerCase())) return
 
-      const parts = message.parts as any[] | undefined
-      if (!parts || parts.length === 0) return
+      const part = props?.part as Record<string, unknown> | undefined
+      if (!part) return
 
-      for (const part of parts) {
-        const type = part.type as string
-        if (type === "thinking" || type === "reasoning") {
-          const thinkingText = (part.thinking || part.text || "") as string
-          if (thinkingText && detectEnglishViolation(thinkingText, violationThreshold)) {
-            const state = getOrCreateState(sessionID)
-            state.pendingViolation = { messageId: message.id, violationCount: 0 }
-            state.updatedAt = Date.now()
-            saveThinkingValidatorState(state)
-          }
+      const partType = part.type as string
+      if (partType !== "thinking" && partType !== "reasoning") return
+
+      const thinkingText = ((part.thinking || part.text || "") as string).trim()
+      if (!thinkingText || thinkingText.length < 20) return
+
+      const state = getOrCreateState(sessionID)
+
+      if (state.lastCheckedTextLength > 0 && thinkingText.length - state.lastCheckedTextLength < 100) {
+        return
+      }
+
+      const isViolation = detectEnglishViolation(thinkingText, violationThreshold)
+      if (isViolation) {
+        const fingerprint = computeFingerprint(thinkingText)
+        if (!state.notifiedFingerprints.includes(fingerprint)) {
+          state.pendingViolationFingerprint = fingerprint
+          state.lastCheckedTextLength = thinkingText.length
+          state.updatedAt = Date.now()
+          saveThinkingValidatorState(state)
         }
       }
     }
