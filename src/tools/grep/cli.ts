@@ -1,6 +1,7 @@
 import {spawn} from "bun"
 import {
     resolveGrepCli,
+    resolveGrepCliWithAutoInstall,
     type GrepBackend,
     DEFAULT_MAX_DEPTH,
     DEFAULT_MAX_FILESIZE,
@@ -130,7 +131,7 @@ export function parseCountOutput(output: string): CountResult[] {
 }
 
 export async function runRg(options: GrepOptions): Promise<GrepResult> {
-    const cli = resolveGrepCli()
+    const cli = await resolveGrepCliWithAutoInstall()
     const args = buildArgs(options, cli.backend)
     const timeout = Math.min(options.timeout ?? DEFAULT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
 
@@ -194,7 +195,7 @@ export async function runRg(options: GrepOptions): Promise<GrepResult> {
 }
 
 export async function runRgCount(options: Omit<GrepOptions, "context">): Promise<CountResult[]> {
-    const cli = resolveGrepCli()
+    const cli = await resolveGrepCliWithAutoInstall()
     const args = buildArgs({...options, context: 0}, cli.backend)
 
     if (cli.backend === "rg") {

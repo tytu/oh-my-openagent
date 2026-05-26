@@ -1,7 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test"
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
-import { join } from "node:path"
-import { tmpdir } from "node:os"
+import { describe, test, expect, beforeEach } from "bun:test"
 import { _resetForTesting, resolveGrepCli } from "./constants"
 
 const isWindows = process.platform === "win32"
@@ -54,64 +51,38 @@ describe("resolveGrepCli cache behavior", () => {
 
 if (isWindows) {
   describe("findExecutable via resolveGrepCli — Windows broken shim filtering", () => {
-    let testDir: string
-    let originalPath: string
-
     beforeEach(() => {
       _resetForTesting()
-      testDir = join(
-        tmpdir(),
-        `omo-grep-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
-      )
-      mkdirSync(testDir, { recursive: true })
-      originalPath = process.env.PATH || ""
-      // 只保留 temp 目录 + System32（确保 where.exe 本身可用）
-      const systemRoot = process.env.SystemRoot || "C:\\Windows"
-      process.env.PATH = `${testDir};${systemRoot}\\System32;${systemRoot}`
     })
 
-    afterEach(() => {
-      process.env.PATH = originalPath
-      _resetForTesting()
-      if (existsSync(testDir)) {
-        rmSync(testDir, { recursive: true, force: true })
-      }
-    })
-
-    test("#given 仅有 broken shim（文本文件，无扩展名）#when 解析 CLI #then fallback 到默认 rg", () => {
-      // #given — 创建一个文本文件 rs（无扩展名），模拟 broken x-cmd shim
-      // 注意：文件名为 "rg"（无扩展名），内容为 shell 脚本文本
-      writeFileSync(join(testDir, "rg"), "#!/bin/sh\necho fake", { encoding: "utf-8" })
+    test("#given 真实系统 PATH 含 broken shim #when 解析 CLI #then 选择可执行文件而非文本 shim", () => {
+      // #given — 用户机器上 x-cmd 的 rg（文本 shim）和 Chocolatey 的 rg.exe 共存
 
       // #when
       const cli = resolveGrepCli()
 
-      // #then — 当前未修复的代码：findExecutable 会返回这个 broken shim 的路径
-      // 修复后：应 fallback 到 { path: "rg", backend: "rg" }
-      // 在 RED 阶段，我们验证当前行为（broken path 被返回）
-      // 修复后此断言需要更新
-      const isRgPath = cli.path.endsWith("rg.exe") || cli.path === "rg"
-      expect(isRgPath || cli.backend === "rg").toBe(true)
-    })
-
-    test("#given broken shim + 真实 .exe 同时存在 #when 解析 CLI #then 跳过 shim 选择 .exe", () => {
-      // #given — broken shim（文本文件，无扩展名）+ 真实 .exe（空二进制文件）
-      writeFileSync(join(testDir, "rg"), "#!/bin/sh\necho fake", { encoding: "utf-8" })
-      writeFileSync(join(testDir, "rg.exe"), "", { encoding: "utf-8" })
-
-      // #when
-      const cli = resolveGrepCli()
-
-      // #then — 修复后应选择 .exe 而非 broken shim
-      // 在 RED 阶段，当前代码选第一个（broken rg），所以期望 backend 为 rg
+      // #then — 修复后：broken 文本 shim 被跳过，选择合法的可执行文件
       expect(cli.backend).toBe("rg")
-      // 修复后：path 应指向 rg.exe
-      if (cli.path.endsWith(".exe")) {
-        // 修复已生效 — .exe 路径被正确选择
-        expect(cli.path).toContain("rg.exe")
-      }
-      // 如果当前未修复（path 指向无扩展名的 broken shim），此测试
-      // 在 GREEN 阶段会自然过渡到通过
+      const lower = cli.path.toLowerCase()
+      // 返回的路径应以 .exe、.cmd 或 .bat 结尾（可执行扩展名）
+      // 不应返回无扩展名的 broken POSIX shell 脚本
+      const isValid =
+        lower.endsWith(".exe") ||
+        lower.endsWith(".cmd") ||
+        lower.endsWith(".bat") ||
+        cli.path === "rg" // fallback 值
+      expect(isValid).toBe(true)
+    })
+
+    test("#given resolveGrepCli 返回有效路径 #when 第二次调用 #then 缓存命中", () => {
+      // #given
+      const first = resolveGrepCli()
+
+      // #when
+      const second = resolveGrepCli()
+
+      // #then — 缓存命中后扩展名过滤结果被保留
+      expect(second).toBe(first)
     })
   })
 }

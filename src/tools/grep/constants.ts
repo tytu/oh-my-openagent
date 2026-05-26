@@ -30,7 +30,25 @@ function findExecutable(name: string): string | null {
   try {
     const result = spawnSync(cmd, [name], { encoding: "utf-8", timeout: 5000 })
     if (result.status === 0 && result.stdout.trim()) {
-      return result.stdout.trim().split("\n")[0]
+      const candidates = result.stdout.trim().split(/\r?\n/)
+      // Windows：遍历 where 的所有结果，跳过非可执行 shim
+      for (const candidate of candidates) {
+        const trimmed = candidate.trim()
+        if (!trimmed) continue
+        // 在 Windows 上跳过不以 .exe/.cmd/.bat 结尾的非可执行 shim（如 x-cmd 的 POSIX shell 脚本）
+        if (isWindows) {
+          const lower = trimmed.toLowerCase()
+          if (!lower.endsWith(".exe") && !lower.endsWith(".cmd") && !lower.endsWith(".bat")) {
+            continue
+          }
+        }
+        // 验证文件确实存在
+        if (existsSync(trimmed)) {
+          return trimmed
+        }
+      }
+      // 如果所有候选都被跳过，回退到不验证的模式（兼容非标准安装）
+      return candidates[0].trim() || null
     }
   } catch {
     // Command execution failed
