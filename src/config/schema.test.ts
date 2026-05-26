@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { AgentOverrideConfigSchema, BuiltinCategoryNameSchema, CategoryConfigSchema, FallbackModelEntrySchema, OhMyOpenCodeConfigSchema, RuntimeFallbackConfigSchema } from "./schema"
+import { AgentOverrideConfigSchema, BuiltinCategoryNameSchema, CategoryConfigSchema, FallbackModelEntrySchema, LanguageEnforcementConfigSchema, OhMyOpenCodeConfigSchema, RuntimeFallbackConfigSchema } from "./schema"
 
 describe("disabled_mcps schema", () => {
   test("should accept built-in MCP names", () => {
@@ -945,5 +945,99 @@ describe("RuntimeFallbackConfigSchema", () => {
 
     // #then
     expect(result6.success).toBe(false)
+  })
+})
+
+describe("language_enforcement schema", () => {
+  test("should use all defaults when empty", () => {
+    // #given
+    const config = {}
+
+    // #when
+    const result = LanguageEnforcementConfigSchema.safeParse(config)
+
+    // #then
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data?.enabled).toBe(true)
+      expect(result.data?.reminder_interval).toBe(5)
+      expect(result.data?.violation_threshold).toBe(0.6)
+      expect(result.data?.excluded_agents).toEqual(["librarian", "multimodal-looker"])
+      expect(result.data?.user_message_english_threshold).toBe(0.6)
+      expect(result.data?.user_message_lookback).toBe(3)
+    }
+  })
+
+  test("should accept custom values", () => {
+    // #given
+    const config = {
+      enabled: false,
+      reminder_interval: 3,
+      violation_threshold: 0.8,
+      excluded_agents: ["librarian"],
+      user_message_english_threshold: 0.5,
+      user_message_lookback: 5,
+    }
+
+    // #when
+    const result = LanguageEnforcementConfigSchema.safeParse(config)
+
+    // #then
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data?.enabled).toBe(false)
+      expect(result.data?.reminder_interval).toBe(3)
+      expect(result.data?.violation_threshold).toBe(0.8)
+      expect(result.data?.excluded_agents).toEqual(["librarian"])
+    }
+  })
+
+  test("should be accepted in full config", () => {
+    // #given
+    const config = {
+      language_enforcement: {
+        enabled: true,
+        reminder_interval: 10,
+      },
+    }
+
+    // #when
+    const result = OhMyOpenCodeConfigSchema.safeParse(config)
+
+    // #then
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.language_enforcement?.reminder_interval).toBe(10)
+    }
+  })
+
+  test("should coerce omission to undefined (optional)", () => {
+    // #given
+    const config = {}
+
+    // #when
+    const result = OhMyOpenCodeConfigSchema.safeParse(config)
+
+    // #then
+    expect(result.success).toBe(true)
+    if (result.success) {
+      // optional() means undefined when omitted; defaults only apply when field is provided
+      expect(result.data.language_enforcement).toBeUndefined()
+    }
+  })
+
+  test("should apply defaults when language_enforcement is empty object", () => {
+    // #given
+    const config = { language_enforcement: {} }
+
+    // #when
+    const result = OhMyOpenCodeConfigSchema.safeParse(config)
+
+    // #then
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.language_enforcement?.enabled).toBe(true)
+      expect(result.data.language_enforcement?.reminder_interval).toBe(5)
+    }
   })
 })

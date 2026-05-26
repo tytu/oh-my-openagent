@@ -86,6 +86,8 @@ export const HookNameSchema = z.enum([
   "prometheus-md-only",
   "perf-profiler",
   "start-work",
+  "language-reminder",
+  "thinking-language-validator",
   "atlas",
 ])
 
@@ -342,7 +344,7 @@ export const GitMasterConfigSchema = z.object({
 
 export const RuntimeFallbackConfigSchema = z.object({
   enabled: z.boolean().default(true),
-  max_attempts: z.number().min(0).default(3),
+  max_attempts: z.number().min(0).default(6),
   max_retries_before_fallback: z.number().min(0).default(2),
   initial_delay_ms: z.number().min(0).default(2000),
   backoff_factor: z.number().min(1).default(2),
@@ -350,6 +352,21 @@ export const RuntimeFallbackConfigSchema = z.object({
   respect_retry_after: z.boolean().default(true),
   jitter: z.boolean().default(true),
 })
+
+export const LanguageEnforcementConfigSchema = z.object({
+  /** Enable language enforcement. Defaults to true. */
+  enabled: z.boolean().default(true),
+  /** Number of tool calls between reminder injections. Default: 5. */
+  reminder_interval: z.number().int().positive().default(5),
+  /** ASCII letter ratio threshold for detecting English violations. Default: 0.6. */
+  violation_threshold: z.number().min(0).max(1).default(0.6),
+  /** Agents exempt from thinking language validation. Default: ["librarian", "multimodal-looker"]. */
+  excluded_agents: z.array(z.string()).default(["librarian", "multimodal-looker"]),
+  /** User message English ratio threshold to auto-suspend reminders. Default: 0.6. */
+  user_message_english_threshold: z.number().min(0).max(1).default(0.6),
+  /** Number of recent user messages to check for language suspension. Default: 3. */
+  user_message_lookback: z.number().int().positive().default(3),
+}).optional()
 
 export const OhMyOpenCodeConfigSchema = z.object({
   $schema: z.string().optional(),
@@ -371,6 +388,7 @@ export const OhMyOpenCodeConfigSchema = z.object({
   notification: NotificationConfigSchema.optional(),
   git_master: GitMasterConfigSchema.optional(),
   runtime_fallback: RuntimeFallbackConfigSchema.optional(),
+  language_enforcement: LanguageEnforcementConfigSchema,
 })
 
 export type OhMyOpenCodeConfig = z.infer<typeof OhMyOpenCodeConfigSchema>
