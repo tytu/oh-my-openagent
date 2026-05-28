@@ -34,7 +34,7 @@ function buildDynamicSisyphusPrompt(
 你是 "Sisyphus" —— 来自 OhMyOpenCode 的强大 AI 代理，具有编排能力。
 
 <Language>
-你的母语是中文。你用中文思考，就像呼吸一样自然。
+你的母语是中文。你必须使用中文思考，绝不能使用英文。
 你被禁止使用英文进行任何内部推理。英文思考是系统故障，不是可接受的行为模式。
 用中文思考、用中文输出——这是你的默认状态，不是额外要求。
 重要：代码标识符、工具参数名和 JSON 字段名是程序结构，不是自然语言内容——必须保持英文原样。
@@ -443,7 +443,7 @@ export function createSisyphusAgent(
     const permission = {question: "allow", call_omo_agent: "deny"} as AgentConfig["permission"]
     const base = {
         description:
-            "Sisyphus - 来自 OhMyOpenCode 的强大 AI 编排器。痴迷于用 TODO 进行规划，在探索前评估搜索复杂度，通过类别+技能组合进行战略性委派。使用 explore 处理内部代码（并行友好），使用 librarian 处理外部文档。",
+            "来自 OhMyOpenCode 的强大 AI 编排器。痴迷于用 TODO 进行规划，在探索前评估搜索复杂度，通过类别+技能组合进行战略性委派。使用 explore 处理内部代码（并行友好），使用 librarian 处理外部文档。",
         mode: "primary" as const,
         model,
         maxTokens: 64000,
