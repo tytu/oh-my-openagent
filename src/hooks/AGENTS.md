@@ -36,7 +36,7 @@ hooks/
 ├── runtime-fallback/           # Provider 错误自动 fallback（429/402/quota）
 ├── interactive-bash-session/   # Tmux 会话管理
 ├── non-interactive-env/        # 非 TTY 环境处理
-├── start-work/                 # Sisyphus 工作会话启动器
+├── start-work/                 # 主执行官工作会话启动器
 ├── task-resume-info/           # 已取消任务的恢复信息
 ├── question-label-truncator/   # 自动截断超过 30 字符的问题标签
 ├── perf-profiler/              # 性能分析（hooks 层）

@@ -1,8 +1,8 @@
 # 项目知识库
 
-**生成时间：** 2026-05-29T03:45:00+08:00
+**生成时间：** 2026-05-29T06:30:00+08:00
 **分支：** master
-**提交：** 6d8a9a7
+**提交：** a15fc27
 
 ## 概述
 
@@ -42,7 +42,7 @@ oh-my-opencode/
 | 添加命令 | `src/features/builtin-commands/` | 添加模板 + 在 commands.ts 中注册 |
 | 配置模式 | `src/config/schema.ts` | Zod 模式，运行 `bun run build:schema` |
 | 后台 Agent | `src/features/background-agent/` | manager.ts（1326 行） |
-| 编排器 | `src/hooks/atlas/` | 主编排钩子（604 行） |
+| 编排器 | `src/hooks/atlas/` | 任务编排钩子（604 行） |
 | 配置处理器 | `src/plugin-handlers/` | 配置加载和合并 - 见 src/plugin-handlers/AGENTS.md |
 
 ## 技术栈
@@ -145,16 +145,16 @@ bun test               # 118 个测试文件
 
 | Agent | 模型 | 用途 |
 |-------|-------|---------|
-| Sisyphus | anthropic/claude-opus-4-5 | 主编排器 |
-| Atlas | anthropic/claude-opus-4-5 | 主控编排器 |
-| oracle | openai/gpt-5.2 | 咨询、调试 |
-| librarian | opencode/big-pickle | 文档、GitHub 搜索 |
-| explore | opencode/gpt-5-nano | 快速代码搜索 |
-| multimodal-looker | google/gemini-3-flash | PDF/图片分析 |
-| Prometheus | anthropic/claude-opus-4-5 | 战略规划 |
-| Momus | anthropic/claude-opus-4-5 | 计划审查员 |
-| Metis | anthropic/claude-opus-4-5 | 预规划顾问 |
-| Sisyphus-Junior | anthropic/claude-sonnet-4-5 | 专注任务执行（无委派权限） |
+| 主执行官 | anthropic/claude-opus-4-5 | 主编排器 |
+| 任务编排 | anthropic/claude-opus-4-5 | 主控编排器 |
+| 技术参谋 | openai/gpt-5.2 | 咨询、调试 |
+| 知识典藏 | opencode/big-pickle | 文档、GitHub 搜索 |
+| 深度探索 | opencode/gpt-5-nano | 快速代码搜索 |
+| 媒体解析 | google/gemini-3-flash | PDF/图片分析 |
+| 战略参谋 | anthropic/claude-opus-4-5 | 战略规划 |
+| 计划审查 | anthropic/claude-opus-4-5 | 计划审查员 |
+| 预审顾问 | anthropic/claude-opus-4-5 | 预规划顾问 |
+| 执行助理 | anthropic/claude-sonnet-4-5 | 专注任务执行（无委派权限） |
 
 ## 部署
 
@@ -176,7 +176,7 @@ bun test               # 118 个测试文件
 | `src/cli/config-manager.ts` | 551 | JSONC 配置解析 |
 | `src/tools/lsp/client.ts` | 523 | LSP JSON-RPC 客户端 |
 | `src/shared/provider-error-classifier.ts` | 494 | Provider 错误分类（429/402/quota）|
-| `src/agents/atlas.ts` | 463 | Atlas 编排器 Agent |
+| `src/agents/atlas.ts` | 463 | 任务编排 Agent |
 | `src/features/builtin-commands/templates/refactor.ts` | 458 | 重构命令模板 |
 | `src/hooks/todo-continuation-enforcer.ts` | 410 | TODO 强制完成 |
 | `src/agents/momus.ts` | 341 | 计划审查员 |

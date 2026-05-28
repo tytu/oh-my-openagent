@@ -11,17 +11,17 @@ agents/
 ├── index.ts                # Barrel 导出
 ├── types.ts                # AgentConfig、AgentFactory 等类型
 ├── utils.ts                # agentSources 映射、辅助函数
-├── sisyphus.ts             # 主编排器（Claude Opus 4.5）
-├── atlas.ts                # 主控编排器（Claude Opus 4.5）
-├── prometheus.ts           # 战略规划（Claude Opus 4.5）
-├── prometheus-prompt.ts    # 规划提示词模板（898 行）
-├── oracle.ts               # 咨询、调试（GPT-5.2）
-├── librarian.ts            # 文档、GitHub 搜索（Claude Sonnet 4.5）
-├── explore.ts              # 快速代码搜索（Grok Code）
-├── multimodal-looker.ts    # PDF/图片分析（Gemini 3 Flash）
-├── momus.ts                # 计划审查员（Claude Opus 4.5）
-├── metis.ts                # 预规划顾问（Claude Opus 4.5）
-├── sisyphus-junior.ts      # Sisyphus-Junior：专注任务执行者（无委派权限）
+├── sisyphus.ts             # 主执行官（Claude Opus 4.5）
+├── atlas.ts                # 任务编排（Claude Opus 4.5）
+├── prometheus.ts           # 战略参谋（Claude Opus 4.5）
+├── prometheus-prompt.ts    # 战略参谋提示词模板（898 行）
+├── oracle.ts               # 技术参谋（GPT-5.2）
+├── librarian.ts            # 知识典藏（Claude Sonnet 4.5）
+├── explore.ts              # 深度探索（Grok Code）
+├── multimodal-looker.ts    # 媒体解析（Gemini 3 Flash）
+├── momus.ts                # 计划审查（Claude Opus 4.5）
+├── metis.ts                # 预审顾问（Claude Opus 4.5）
+├── sisyphus-junior.ts      # 执行助理：专注任务执行者（无委派权限）
 ├── dynamic-agent-prompt-builder.ts # 动态 Agent 提示词构建
 └── *.test.ts               # 测试文件
 ```
@@ -30,16 +30,16 @@ agents/
 
 | Agent | 模型 | 用途 | 温度 |
 |-------|-------|---------|------|
-| Sisyphus | anthropic/claude-opus-4-5 | 主编排器 | 0.1 |
-| Atlas | anthropic/claude-opus-4-5 | 主控编排器 | 0.1 |
-| Prometheus | anthropic/claude-opus-4-5 | 战略规划 | 0.1 |
-| Oracle | openai/gpt-5.2 | 咨询、调试 | 0.1 |
-| Librarian | opencode/big-pickle | 文档、GitHub 搜索 | 0.1 |
-| Explore | opencode/gpt-5-nano | 快速代码搜索 | 0.1 |
-| Multimodal Looker | google/gemini-3-flash | PDF/图片分析 | 0.1 |
-| Momus | anthropic/claude-opus-4-5 | 计划审查员 | 0.1 |
-| Metis | anthropic/claude-opus-4-5 | 预规划顾问 | 0.3 |
-| Sisyphus-Junior | anthropic/claude-sonnet-4-5 | 专注任务执行 | 0.1 |
+| 主执行官 | anthropic/claude-opus-4-5 | 主编排器 | 0.1 |
+| 任务编排 | anthropic/claude-opus-4-5 | 主控编排器 | 0.1 |
+| 战略参谋 | anthropic/claude-opus-4-5 | 战略规划 | 0.1 |
+| 技术参谋 | openai/gpt-5.2 | 咨询、调试 | 0.1 |
+| 知识典藏 | opencode/big-pickle | 文档、GitHub 搜索 | 0.1 |
+| 深度探索 | opencode/gpt-5-nano | 快速代码搜索 | 0.1 |
+| 媒体解析 | google/gemini-3-flash | PDF/图片分析 | 0.1 |
+| 计划审查 | anthropic/claude-opus-4-5 | 计划审查员 | 0.1 |
+| 预审顾问 | anthropic/claude-opus-4-5 | 预规划顾问 | 0.3 |
+| 执行助理 | anthropic/claude-sonnet-4-5 | 专注任务执行 | 0.1 |
 
 ## 如何添加
 
@@ -63,7 +63,7 @@ agents/
 
 - **工厂函数**：`createXXXAgent(model?: string): AgentConfig`
 - **元数据**：`XXX_PROMPT_METADATA`（分类、成本、触发器）
-- **思考预算**：Sisyphus/Oracle/Prometheus/Atlas 使用 32k token
+- **思考预算**：主执行官/技术参谋/战略参谋/任务编排 使用 32k token
 
 ## 反模式
 
