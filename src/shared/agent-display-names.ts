@@ -5,29 +5,29 @@
  */
 export const AGENT_DISPLAY_NAMES: Record<string, string> = {
   sisyphus: "主执行官",
-  atlas: "任务执行",
-  prometheus: "战略规划",
+  atlas: "任务编排",
+  prometheus: "战略参谋",
   "sisyphus-junior": "执行助理",
-  metis: "预规划",
-  momus: "质量评审",
-  oracle: "技术诊断",
-  librarian: "知识检索",
-  explore: "代码搜索",
-  "multimodal-looker": "多元分析",
+  metis: "预审顾问",
+  momus: "计划审查",
+  oracle: "技术参谋",
+  librarian: "知识典藏",
+  explore: "深度探索",
+  "multimodal-looker": "媒体解析",
 }
 
 /** Reverse mapping: Chinese display name → English config key */
 export const AGENT_DISPLAY_TO_KEY: Record<string, string> = {
   "主执行官": "sisyphus",
-  "任务执行": "atlas",
-  "战略规划": "prometheus",
+  "任务编排": "atlas",
+  "战略参谋": "prometheus",
   "执行助理": "sisyphus-junior",
-  "预规划": "metis",
-  "质量评审": "momus",
-  "技术诊断": "oracle",
-  "知识检索": "librarian",
-  "代码搜索": "explore",
-  "多元分析": "multimodal-looker",
+  "预审顾问": "metis",
+  "计划审查": "momus",
+  "技术参谋": "oracle",
+  "知识典藏": "librarian",
+  "深度探索": "explore",
+  "媒体解析": "multimodal-looker",
 }
 
 /**
