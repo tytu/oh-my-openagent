@@ -14,6 +14,7 @@ import { classifyProviderError, classifyTextMessage } from "../../shared/provide
 import { calculateRetryDelay, DEFAULT_RETRY_CONFIG } from "../../shared/retry-strategy"
 import { log } from "../../shared/logger"
 import { resolveNextFallbackModel, type FallbackAttempt, type FallbackModel } from "../../shared/runtime-fallback"
+import { resolveAgentName } from "../../shared/agent-display-names"
 
 export interface RuntimeFallbackOptions {
   config?: RuntimeFallbackConfig
@@ -259,7 +260,13 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       registerModelError(currentModel.providerID, currentModel.modelID, classification.category, sessionID)
     }
 
-    agent ??= "sisyphus"
+    if (!agent) {
+      agent = "sisyphus"
+      log("[runtime-fallback] agent identity defaulted to sisyphus (not found in props or message history)", {
+        sessionID,
+        eventType: event.type,
+      })
+    }
     let attempts = fallbackAttempts.get(sessionID) ?? []
 
     // Record current model as a failed attempt so the chain never goes back to it
@@ -351,6 +358,7 @@ export function createRuntimeFallbackHook(ctx: PluginInput, options?: RuntimeFal
       await ctx.client.session.prompt({
         path: { id: sessionID },
         body: {
+          agent: resolveAgentName(agent),
           model: fallbackResult.model,
           parts: [{ type: "text", text: "continue" }],
         },

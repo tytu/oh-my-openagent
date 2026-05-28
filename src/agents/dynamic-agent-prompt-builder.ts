@@ -1,4 +1,5 @@
 import type { AgentPromptMetadata, BuiltinAgentName } from "./types"
+import { agentNameMatches, resolveToEnglishKey } from "../shared/agent-display-names"
 
 export interface AvailableAgent {
   name: BuiltinAgentName
@@ -111,7 +112,7 @@ export function buildToolSelectionTable(
 }
 
 export function buildExploreSection(agents: AvailableAgent[]): string {
-  const exploreAgent = agents.find((a) => a.name === "explore")
+  const exploreAgent = agents.find((a) => agentNameMatches(a.name, "explore"))
   if (!exploreAgent) return ""
 
   const useWhen = exploreAgent.metadata.useWhen || []
@@ -128,7 +129,7 @@ ${useWhen.map((w) => `|  | ${w} |`).join("\n")}`
 }
 
 export function buildLibrarianSection(agents: AvailableAgent[]): string {
-  const librarianAgent = agents.find((a) => a.name === "librarian")
+  const librarianAgent = agents.find((a) => agentNameMatches(a.name, "librarian"))
   if (!librarianAgent) return ""
 
   const useWhen = librarianAgent.metadata.useWhen || []
@@ -253,7 +254,7 @@ delegate_task(category="...", load_skills=[], prompt="...")  // 无理由的空 
 }
 
 export function buildOracleSection(agents: AvailableAgent[]): string {
-  const oracleAgent = agents.find((a) => a.name === "oracle")
+  const oracleAgent = agents.find((a) => agentNameMatches(a.name, "oracle"))
   if (!oracleAgent) return ""
 
   const useWhen = oracleAgent.metadata.useWhen || []
@@ -340,8 +341,8 @@ export function buildUltraworkSection(
   if (agents.length > 0) {
     const ultraworkAgentPriority = ["explore", "librarian", "plan", "oracle"]
     const sortedAgents = [...agents].sort((a, b) => {
-      const aIdx = ultraworkAgentPriority.indexOf(a.name)
-      const bIdx = ultraworkAgentPriority.indexOf(b.name)
+      const aIdx = ultraworkAgentPriority.indexOf(resolveToEnglishKey(a.name))
+      const bIdx = ultraworkAgentPriority.indexOf(resolveToEnglishKey(b.name))
       if (aIdx === -1 && bIdx === -1) return 0
       if (aIdx === -1) return 1
       if (bIdx === -1) return -1
@@ -351,7 +352,7 @@ export function buildUltraworkSection(
     lines.push("**Agent**（用于专业咨询/探索）：")
     for (const agent of sortedAgents) {
       const shortDesc = agent.description.split(".")[0] || agent.description
-      const suffix = agent.name === "explore" || agent.name === "librarian" ? "（可多个）" : ""
+      const suffix = agentNameMatches(agent.name, "explore") || agentNameMatches(agent.name, "librarian") ? "（可多个）" : ""
       lines.push(`- \`${agent.name}${suffix}\`: ${shortDesc}`)
     }
   }

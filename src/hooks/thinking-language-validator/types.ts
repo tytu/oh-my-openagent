@@ -4,4 +4,10 @@ export interface ThinkingValidatorState {
   lastCheckedTextLength: number
   pendingViolationFingerprint: string | null
   updatedAt: number
+  totalDetectionCount: number
+  triggerWordHitCount: number
+  asciiRatioHitCount: number
+  dedupSkipCount: number
+  throttleSkipCount: number
+  reminderInjectedCount: number
 }

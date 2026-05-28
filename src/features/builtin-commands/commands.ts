@@ -3,6 +3,7 @@ import type { BuiltinCommandName, BuiltinCommands } from "./types"
 import { INIT_DEEP_TEMPLATE } from "./templates/init-deep"
 import { RALPH_LOOP_TEMPLATE, CANCEL_RALPH_TEMPLATE } from "./templates/ralph-loop"
 import { REFACTOR_TEMPLATE } from "./templates/refactor"
+import { resolveAgentName } from "../../shared/agent-display-names"
 import { START_WORK_TEMPLATE } from "./templates/start-work"
 
 const BUILTIN_COMMAND_DEFINITIONS: Record<BuiltinCommandName, Omit<CommandDefinition, "name">> = {
@@ -55,7 +56,7 @@ ${REFACTOR_TEMPLATE}
   },
   "start-work": {
     description: "(builtin) 从 Prometheus 计划启动 Sisyphus 工作会话",
-    agent: "atlas",
+    agent: resolveAgentName("atlas"),
     template: `<command-instruction>
 ${START_WORK_TEMPLATE}
 </command-instruction>

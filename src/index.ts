@@ -79,6 +79,7 @@ import { SkillMcpManager } from "./features/skill-mcp-manager";
 import { initTaskToastManager } from "./features/task-toast-manager";
 import { type FallbackModelEntry, type HookName } from "./config";
 import { log, detectExternalNotificationPlugin, getNotificationConflictWarning, resetMessageCursor, includesCaseInsensitive, scanForReservedNames, formatReservedNamesWarning } from "./shared";
+import { agentNameMatches } from "./shared/agent-display-names";
 import { loadPluginConfig } from "./plugin-config";
 import { createModelCacheState, getModelLimit } from "./plugin-state";
 import { createConfigHandler } from "./plugin-handlers";
@@ -652,10 +653,9 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
       if (input.tool === "task") {
         const args = output.args as Record<string, unknown>;
         const subagentType = args.subagent_type as string;
-        const isExploreOrLibrarian = includesCaseInsensitive(
-          ["explore", "librarian"],
-          subagentType ?? ""
-        );
+        const isExploreOrLibrarian = subagentType
+          ? ["explore", "librarian"].some((a) => agentNameMatches(subagentType, a))
+          : false
 
         args.tools = {
           ...(args.tools as Record<string, boolean> | undefined),

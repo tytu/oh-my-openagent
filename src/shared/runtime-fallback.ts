@@ -6,6 +6,7 @@
  */
 
 import { fuzzyMatchModel } from "./model-availability"
+import { resolveToEnglishKey } from "./agent-display-names"
 import {
   AGENT_MODEL_REQUIREMENTS,
   CATEGORY_MODEL_REQUIREMENTS,
@@ -91,8 +92,9 @@ function modelKey(m: FallbackModel): string {
  * 从 AGENT_MODEL_REQUIREMENTS 或 CATEGORY_MODEL_REQUIREMENTS 获取 fallback chain
  */
 function getChain(agent?: string, category?: string): FallbackEntry[] | undefined {
-  if (agent && AGENT_MODEL_REQUIREMENTS[agent]) {
-    return AGENT_MODEL_REQUIREMENTS[agent].fallbackChain
+  const resolvedAgent = agent ? resolveToEnglishKey(agent) : undefined
+  if (resolvedAgent && AGENT_MODEL_REQUIREMENTS[resolvedAgent]) {
+    return AGENT_MODEL_REQUIREMENTS[resolvedAgent].fallbackChain
   }
   if (category && CATEGORY_MODEL_REQUIREMENTS[category]) {
     return CATEGORY_MODEL_REQUIREMENTS[category].fallbackChain

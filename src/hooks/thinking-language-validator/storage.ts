@@ -26,6 +26,12 @@ export function loadThinkingValidatorState(sessionID: string): ThinkingValidator
       lastCheckedTextLength: typeof parsed.lastCheckedTextLength === "number" ? parsed.lastCheckedTextLength : 0,
       pendingViolationFingerprint: typeof parsed.pendingViolationFingerprint === "string" ? parsed.pendingViolationFingerprint : null,
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
+      totalDetectionCount: typeof parsed.totalDetectionCount === "number" ? parsed.totalDetectionCount : 0,
+      triggerWordHitCount: typeof parsed.triggerWordHitCount === "number" ? parsed.triggerWordHitCount : 0,
+      asciiRatioHitCount: typeof parsed.asciiRatioHitCount === "number" ? parsed.asciiRatioHitCount : 0,
+      dedupSkipCount: typeof parsed.dedupSkipCount === "number" ? parsed.dedupSkipCount : 0,
+      throttleSkipCount: typeof parsed.throttleSkipCount === "number" ? parsed.throttleSkipCount : 0,
+      reminderInjectedCount: typeof parsed.reminderInjectedCount === "number" ? parsed.reminderInjectedCount : 0,
     }
 
     return state

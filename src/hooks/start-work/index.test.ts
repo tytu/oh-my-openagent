@@ -8,6 +8,7 @@ import {
   clearBoulderState,
 } from "../../features/boulder-state"
 import type { BoulderState } from "../../features/boulder-state"
+import { resolveAgentName } from "../../shared/agent-display-names"
 import * as sessionState from "../../features/claude-code-session-state"
 
 describe("start-work hook", () => {
@@ -395,7 +396,7 @@ describe("start-work hook", () => {
       )
 
       // #then
-      expect(updateSpy).toHaveBeenCalledWith("ses-prometheus-to-sisyphus", "atlas")
+      expect(updateSpy).toHaveBeenCalledWith("ses-prometheus-to-sisyphus", resolveAgentName("atlas"))
       updateSpy.mockRestore()
     })
   })

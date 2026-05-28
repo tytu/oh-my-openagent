@@ -9,6 +9,7 @@ import { getSessionAgent } from "../../features/claude-code-session-state"
 import { log } from "../../shared/logger"
 import { PerfTimer } from "../../shared/perf-timer"
 import { consumeNewMessages } from "../../shared/session-cursor"
+import { resolveAgentName } from "../../shared/agent-display-names"
 
 type OpencodeClient = PluginInput["client"]
 
@@ -72,7 +73,7 @@ if (!args.agent || args.agent.trim() === "") {
         const task = await manager.launch({
           description: args.description,
           prompt: args.prompt,
-          agent: args.agent.trim(),
+          agent: resolveAgentName(args.agent.trim()),
           parentSessionID: ctx.sessionID,
           parentMessageID: ctx.messageID,
           parentModel,

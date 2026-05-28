@@ -324,7 +324,7 @@ describe("zh-language-instruction injection", () => {
       expect(agents[name]!.prompt!).toContain("<Language_Instruction>")
       expect(agents[name]!.prompt!).toContain("你的母语是中文")
       expect(agents[name]!.prompt!).toContain("禁止行为（零容忍）")
-      expect(agents[name]!.prompt!).toContain("本轮我使用中文思考")
+      expect(agents[name]!.prompt!).toContain("我必须使用中文思考，绝不能使用英文")
       expect(agents[name]!.prompt!).toContain("检测到语言漂移，切回中文")
     }
   })

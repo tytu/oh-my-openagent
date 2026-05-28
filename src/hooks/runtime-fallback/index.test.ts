@@ -2,6 +2,7 @@ import { describe, test, expect, mock, beforeEach } from "bun:test"
 import type { ProviderErrorClassification } from "../../shared/provider-error-classifier"
 import type { RetryDecision } from "../../shared/retry-strategy"
 import type { FallbackResult } from "../../shared/runtime-fallback"
+import { resolveAgentName } from "../../shared/agent-display-names"
 
 // ── Mock shared modules ──────────────────────────────────────────────
 const mockClassifyProviderError = mock(
@@ -1518,6 +1519,97 @@ describe("runtime-fallback", () => {
       const result = await hook.handler({ event })
       expect(ctx.client.session.abort).toHaveBeenCalledWith({ path: { id: "ses_exhausted" } })
       expect(result).toBe(false)
+    })
+
+    // #given session.error event with agent in props
+    // #when handler processes the event
+    // #then session.prompt should include agent from props
+    test("should pass agent from event props to session.prompt body", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "quota exceeded",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = {
+        type: "session.error",
+        properties: {
+          sessionID: "ses_agent_test",
+          error: { status: 402, type: "billing_error" },
+          agent: "prometheus",
+        },
+      }
+
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(ctx.client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            agent: resolveAgentName("prometheus"),
+            model: { providerID: "openai", modelID: "gpt-4o" },
+          }),
+        }),
+      )
+    })
+
+    // #given session.error event WITHOUT agent in props, but message history has agent
+    // #when handler processes the event
+    // #then session.prompt should include agent from message history
+    test("should fallback agent from message history when props.agent is missing", async () => {
+      const ctx = createMockCtx()
+      const hook = createRuntimeFallbackHook(ctx)
+
+      ctx.client.session.messages = mock(() =>
+        Promise.resolve({
+          data: [
+            { info: { agent: "prometheus", model: { providerID: "anthropic", modelID: "claude-opus-4-5" } } },
+          ],
+        }),
+      )
+
+      mockClassifyProviderError.mockReturnValueOnce({
+        category: "quota",
+        retryable: false,
+        shouldFallback: true,
+        reason: "quota exceeded",
+      })
+
+      mockResolveNextFallbackModel.mockReturnValueOnce({
+        kind: "next",
+        model: { providerID: "openai", modelID: "gpt-4o" },
+        attempts: [],
+      })
+
+      const event = {
+        type: "session.error",
+        properties: {
+          sessionID: "ses_history_test",
+          error: { status: 402, type: "billing_error" },
+        },
+      }
+
+      const result = await hook.handler({ event })
+
+      expect(result).toBe(true)
+      expect(ctx.client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            agent: resolveAgentName("prometheus"),
+            model: { providerID: "openai", modelID: "gpt-4o" },
+          }),
+        }),
+      )
     })
   })
 })

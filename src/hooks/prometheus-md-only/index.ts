@@ -6,7 +6,7 @@ import { findNearestMessageWithFields, findFirstMessageWithAgent, MESSAGE_STORAG
 import { getSessionAgent } from "../../features/claude-code-session-state"
 import { log } from "../../shared/logger"
 import { SYSTEM_DIRECTIVE_PREFIX } from "../../shared/system-directive"
-import { getAgentDisplayName } from "../../shared/agent-display-names"
+import { getAgentDisplayName, agentNameMatches } from "../../shared/agent-display-names"
 
 export * from "./constants"
 
@@ -82,7 +82,7 @@ export function createPrometheusMdOnlyHook(ctx: PluginInput) {
     ): Promise<void> => {
       const agentName = getAgentFromSession(input.sessionID)
 
-      if (!agentName || !PROMETHEUS_AGENTS.includes(agentName)) {
+      if (!agentName || !PROMETHEUS_AGENTS.some((a) => agentNameMatches(agentName, a))) {
         return
       }
 

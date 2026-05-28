@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from "bun:test"
 import { createThinkingLanguageValidatorHook } from "./index"
 import { THINKING_VALIDATOR_STORAGE } from "./constants"
+import { loadThinkingValidatorState } from "./storage"
 import { existsSync, rmSync } from "node:fs"
 
 function makeToolInput(sessionID: string): any {
@@ -282,5 +283,307 @@ describe("thinking-language-validator hook", () => {
 
     // #then - state cleaned, no pending violation
     expect(output.output).toBe("")
+  })
+})
+
+describe("detection counters", () => {
+  beforeEach(() => {
+    if (existsSync(THINKING_VALIDATOR_STORAGE)) {
+      rmSync(THINKING_VALIDATOR_STORAGE, { recursive: true, force: true })
+    }
+  })
+
+  it("T11: should initialize all counters to 0 for new session", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-11", role: "assistant" },
+          part: { type: "thinking", text: "Let me search for the implementation" },
+        },
+      },
+    })
+
+    const output = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-11"), output)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-11")
+    expect(state).not.toBeNull()
+    expect(state!.totalDetectionCount).toBe(1)
+    expect(state!.triggerWordHitCount).toBe(1)
+    expect(state!.asciiRatioHitCount).toBe(0)
+    expect(state!.dedupSkipCount).toBe(0)
+    expect(state!.throttleSkipCount).toBe(0)
+    expect(state!.reminderInjectedCount).toBe(1)
+  })
+
+  it("T12: should increment totalDetectionCount on each detection", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-12", role: "assistant" },
+          part: { type: "thinking", text: "Let me check" },
+        },
+      },
+    })
+
+    const output1 = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-12"), output1)
+
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-12", role: "assistant" },
+          part: { type: "thinking", text: "Let me check" + "x".repeat(100) },
+        },
+      },
+    })
+
+    const output2 = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-12"), output2)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-12")
+    expect(state).not.toBeNull()
+    expect(state!.totalDetectionCount).toBe(2)
+  })
+
+  it("T13: should increment triggerWordHitCount on trigger match", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-13", role: "assistant" },
+          part: { type: "thinking", text: "Let me search for the implementation" },
+        },
+      },
+    })
+
+    const output = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-13"), output)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-13")
+    expect(state).not.toBeNull()
+    expect(state!.triggerWordHitCount).toBe(1)
+    expect(state!.asciiRatioHitCount).toBe(0)
+  })
+
+  it("T14: should increment asciiRatioHitCount on ASCII ratio match", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-14", role: "assistant" },
+          part: { type: "thinking", text: "This is a very long English sentence without any trigger words but has high ASCII ratio" },
+        },
+      },
+    })
+
+    const output = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-14"), output)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-14")
+    expect(state).not.toBeNull()
+    expect(state!.asciiRatioHitCount).toBe(1)
+    expect(state!.triggerWordHitCount).toBe(0)
+  })
+
+  it("T15: should increment throttleSkipCount when throttled", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-15", role: "assistant" },
+          part: { type: "thinking", text: "Let me search" + "x".repeat(10) },
+        },
+      },
+    })
+
+    for (let i = 0; i < 5; i++) {
+      await hook.event({
+        event: {
+          type: "message.part.updated",
+          properties: {
+            info: { sessionID: "ses-15", role: "assistant" },
+            part: { type: "thinking", text: "Let me search" + "x".repeat(10 + i * 10) },
+          },
+        },
+      })
+    }
+
+    const output = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-15"), output)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-15")
+    expect(state).not.toBeNull()
+    expect(state!.throttleSkipCount).toBe(5)
+  })
+
+  it("T16: should not dedup when fingerprint differs", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-16", role: "assistant" },
+          part: { type: "thinking", text: "Let me check" },
+        },
+      },
+    })
+
+    const output1 = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-16"), output1)
+
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-16", role: "assistant" },
+          part: { type: "thinking", text: "Let me check" + "x".repeat(100) },
+        },
+      },
+    })
+
+    const output2 = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-16"), output2)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-16")
+    expect(state).not.toBeNull()
+    expect(state!.totalDetectionCount).toBe(2)
+    expect(state!.dedupSkipCount).toBe(0)
+  })
+
+  it("T17: should increment reminderInjectedCount on tool.execute.after", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-17", role: "assistant" },
+          part: { type: "thinking", text: "Let me search for the implementation" },
+        },
+      },
+    })
+
+    const output = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-17"), output)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-17")
+    expect(state).not.toBeNull()
+    expect(state!.reminderInjectedCount).toBe(1)
+  })
+
+  it("T18: should persist counters across save/load cycle", async () => {
+    // #given
+    const hook1 = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook1.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-18", role: "assistant" },
+          part: { type: "thinking", text: "Let me search for the implementation" },
+        },
+      },
+    })
+
+    const output1 = makeToolOutput()
+    await hook1["tool.execute.after"](makeToolInput("ses-18"), output1)
+
+    const hook2 = createThinkingLanguageValidatorHook({} as any)
+
+    await hook2.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-18", role: "assistant" },
+          part: { type: "thinking", text: "Let me search for the implementation" + "x".repeat(100) },
+        },
+      },
+    })
+
+    const output2 = makeToolOutput()
+    await hook2["tool.execute.after"](makeToolInput("ses-18"), output2)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-18")
+    expect(state).not.toBeNull()
+    expect(state!.totalDetectionCount).toBe(2)
+    expect(state!.reminderInjectedCount).toBe(2)
+  })
+
+  it("T19: should reset counters on session.deleted", async () => {
+    // #given
+    const hook = createThinkingLanguageValidatorHook({} as any)
+
+    // #when
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-19", role: "assistant" },
+          part: { type: "thinking", text: "Let me search for the implementation" },
+        },
+      },
+    })
+
+    const output1 = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-19"), output1)
+
+    await hook.event({ event: { type: "session.deleted", properties: { info: { id: "ses-19" } } } })
+
+    await hook.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          info: { sessionID: "ses-19", role: "assistant" },
+          part: { type: "thinking", text: "Let me search for the implementation" },
+        },
+      },
+    })
+
+    const output2 = makeToolOutput()
+    await hook["tool.execute.after"](makeToolInput("ses-19"), output2)
+
+    // #then
+    const state = loadThinkingValidatorState("ses-19")
+    expect(state).not.toBeNull()
+    expect(state!.totalDetectionCount).toBe(1)
+    expect(state!.reminderInjectedCount).toBe(1)
   })
 })

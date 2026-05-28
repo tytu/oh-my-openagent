@@ -58,4 +58,10 @@ claude-code-hooks/
 - Shell 命令和 Git 操作
 - 代码块内容
 
+### 检测参数
+
+- `violation_threshold`：0.5（ASCII 字母比例阈值）
+- `short_text_skip`：4 字符（短文本跳过检测）
+- **Trigger 词检测**：`let me`、`i need`、`first,` 等英文开头直接判定违规
+
 详细规则见根 `AGENTS.md`。

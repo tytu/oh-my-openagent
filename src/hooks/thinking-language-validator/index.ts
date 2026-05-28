@@ -7,6 +7,7 @@ import {
 } from "./storage"
 import { THINKING_VIOLATION_REMINDER } from "./constants"
 import type { ThinkingValidatorState } from "./types"
+import { agentNameMatches } from "../../shared/agent-display-names"
 
 interface ToolExecuteInput {
   tool: string
@@ -114,7 +115,7 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
       if (!sessionID || role !== "assistant") return
 
       const agent = info?.agent as string | undefined
-      if (agent && excludedAgents.includes(agent.toLowerCase())) return
+      if (agent && excludedAgents.some((a) => agentNameMatches(agent, a))) return
 
       const part = props?.part as Record<string, unknown> | undefined
       if (!part) return

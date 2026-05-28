@@ -11,7 +11,8 @@ import { discoverSkills } from "../../features/opencode-skill-loader"
 import { getTaskToastManager } from "../../features/task-toast-manager"
 import type { ModelFallbackInfo } from "../../features/task-toast-manager/types"
 import { subagentSessions, getSessionAgent } from "../../features/claude-code-session-state"
-import { log, getAgentToolRestrictions, resolveModel, getOpenCodeConfigPaths, findByNameCaseInsensitive, equalsIgnoreCase, PerfTimer } from "../../shared"
+import { log, getAgentToolRestrictions, resolveModel, getOpenCodeConfigPaths, findByNameCaseInsensitive, findAgentByName, equalsIgnoreCase, PerfTimer } from "../../shared"
+import { resolveAgentName, agentNameMatches } from "../../shared/agent-display-names"
 import { fetchAvailableModels } from "../../shared/model-availability"
 import { resolveModelWithFallback } from "../../shared/model-resolver"
 import { CATEGORY_MODEL_REQUIREMENTS } from "../../shared/model-requirements"
@@ -543,7 +544,7 @@ ${textContent || "(无文本输出)"}
           const isExplicitlyUnstable = resolved.config.is_unstable_agent === true
           isUnstableAgent = isGeminiModel || isExplicitlyUnstable
 
-          agentToUse = SISYPHUS_JUNIOR_AGENT
+          agentToUse = resolveAgentName(SISYPHUS_JUNIOR_AGENT)
           const parsed = parseModelString(resolved.model)
           categoryModel = parsed
             ? { providerID: parsed.providerID, modelID: parsed.modelID, variant: resolved.config.variant }
@@ -560,16 +561,16 @@ ${textContent || "(无文本输出)"}
           }
           const agentName = args.subagent_type.trim()
 
-        if (equalsIgnoreCase(agentName, SISYPHUS_JUNIOR_AGENT)) {
+        if (equalsIgnoreCase(agentName, SISYPHUS_JUNIOR_AGENT) || agentNameMatches(agentName, SISYPHUS_JUNIOR_AGENT)) {
           return `不能直接使用 subagent_type="${SISYPHUS_JUNIOR_AGENT}"。请改用 category 参数（例如 ${categoryExamples}）。
 
 当你指定 category 时，Sisyphus-Junior 会自动启动。请为你的任务领域选择合适的分类。`
         }
 
-        agentToUse = agentName
+        agentToUse = resolveAgentName(agentName)
 
         // Validate agent exists and is callable (not a primary agent)
-        // Uses case-insensitive matching to allow "Oracle", "oracle", "ORACLE" etc.
+        // Uses bidirectional matching to support English ("oracle") or Chinese ("技术诊断") input
         try {
           const agentsResult = await client.app.agents()
           type AgentInfo = { name: string; mode?: "subagent" | "primary" | "all" }
@@ -577,9 +578,9 @@ ${textContent || "(无文本输出)"}
 
           const callableAgents = agents.filter((a) => a.mode !== "primary")
 
-          const matchedAgent = findByNameCaseInsensitive(callableAgents, agentToUse)
+          const matchedAgent = findAgentByName(callableAgents, agentToUse)
           if (!matchedAgent) {
-            const isPrimaryAgent = findByNameCaseInsensitive(
+            const isPrimaryAgent = findAgentByName(
               agents.filter((a) => a.mode === "primary"),
               agentToUse
             )
@@ -593,7 +594,7 @@ ${textContent || "(无文本输出)"}
               .join(", ")
             return `未知的 agent："${agentToUse}"。可用的 agents：${availableAgents}`
           }
-          // Use the canonical agent name from registration
+          // Config key IS the Chinese name — use directly for routing
           agentToUse = matchedAgent.name
         } catch {
           // If we can't fetch agents, proceed anyway - the session.prompt will fail with a clearer error

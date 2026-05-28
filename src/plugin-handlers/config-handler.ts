@@ -219,7 +219,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     const configAgent = config.agent as AgentConfig | undefined;
 
     if (isSisyphusEnabled && builtinAgents.sisyphus) {
-      (config as { default_agent?: string }).default_agent = "sisyphus";
+      (config as { default_agent?: string }).default_agent = getAgentDisplayName("sisyphus");
 
       const agentConfig: Record<string, unknown> = {
         sisyphus: builtinAgents.sisyphus,
@@ -376,12 +376,17 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       };
     }
 
-    // 为内置 agent 设置中文显示名称（不覆盖用户自定义）
-    for (const key of ['sisyphus', 'atlas', 'prometheus', 'sisyphus-junior',
-      'oracle', 'librarian', 'explore', 'multimodal-looker', 'metis', 'momus']) {
-      const agent = (config.agent as Record<string, { name?: string }>)[key]
-      if (agent && !agent.name) agent.name = getAgentDisplayName(key)
+    // 将内置 agent 的英文 config key 替换为中文 key
+    // Config key 在 OpenCode 中同时用于 TUI 显示和路由，用中文 key 可确保两者一致
+    const translated: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(config.agent as Record<string, unknown>)) {
+      const agentValue = value as Record<string, unknown> | undefined
+      if (!agentValue) { translated[key] = value; continue }
+      // 用英文 key 查找中文名；未知 key 保持原样
+      const displayName = getAgentDisplayName(key)
+      translated[displayName] = value
     }
+    config.agent = translated as typeof config.agent
 
     const agentResult = config.agent as AgentConfig;
 
