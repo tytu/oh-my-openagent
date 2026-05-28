@@ -4,7 +4,7 @@
  * Display names include suffixes for UI/logs (e.g., "Sisyphus (Ultraworker)").
  */
 export const AGENT_DISPLAY_NAMES: Record<string, string> = {
-  sisyphus: "总编排",
+  sisyphus: "主执行官",
   atlas: "任务执行",
   prometheus: "战略规划",
   "sisyphus-junior": "执行助理",
@@ -18,7 +18,7 @@ export const AGENT_DISPLAY_NAMES: Record<string, string> = {
 
 /** Reverse mapping: Chinese display name → English config key */
 export const AGENT_DISPLAY_TO_KEY: Record<string, string> = {
-  "总编排": "sisyphus",
+  "主执行官": "sisyphus",
   "任务执行": "atlas",
   "战略规划": "prometheus",
   "执行助理": "sisyphus-junior",
@@ -52,7 +52,7 @@ export function getAgentDisplayName(configKey: string): string {
 
 /**
  * Resolve an agent identifier to its Chinese runtime name.
- * Accepts English config key ("sisyphus") or Chinese name ("总编排").
+ * Accepts English config key ("sisyphus") or Chinese name ("主执行官").
  * Returns the Chinese name for use with OpenCode API (session.prompt, etc.).
  */
 export function resolveAgentName(input: string): string {
@@ -64,7 +64,7 @@ export function resolveAgentName(input: string): string {
 
 /**
  * Resolve an agent name to its English config key.
- * Accepts Chinese name ("总编排") or English key ("sisyphus").
+ * Accepts Chinese name ("主执行官") or English key ("sisyphus").
  * Returns the English key for use with AGENT_MODEL_REQUIREMENTS, etc.
  */
 export function resolveToEnglishKey(name: string): string {
