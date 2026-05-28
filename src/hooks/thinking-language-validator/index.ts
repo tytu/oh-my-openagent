@@ -44,6 +44,12 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
         lastCheckedTextLength: 0,
         pendingViolationFingerprint: null,
         updatedAt: Date.now(),
+        totalDetectionCount: 0,
+        triggerWordHitCount: 0,
+        asciiRatioHitCount: 0,
+        dedupSkipCount: 0,
+        throttleSkipCount: 0,
+        reminderInjectedCount: 0,
         ...persisted,
       }
       sessionStates.set(sessionID, state)
@@ -71,6 +77,7 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
 
     if (state.pendingViolationFingerprint) {
       output.output += THINKING_VIOLATION_REMINDER
+      state.reminderInjectedCount++
       state.notifiedFingerprints.push(state.pendingViolationFingerprint)
       if (state.notifiedFingerprints.length > 100) {
         state.notifiedFingerprints.shift()
@@ -116,21 +123,33 @@ export function createThinkingLanguageValidatorHook(ctx: PluginInput) {
       if (partType !== "thinking" && partType !== "reasoning") return
 
       const thinkingText = ((part.thinking || part.text || "") as string).trim()
-      if (!thinkingText || thinkingText.length < 20) return
+      if (!thinkingText || thinkingText.length < 4) return
 
       const state = getOrCreateState(sessionID)
 
       if (state.lastCheckedTextLength > 0 && thinkingText.length - state.lastCheckedTextLength < 100) {
+        state.throttleSkipCount++
+        saveThinkingValidatorState(state)
         return
       }
 
       const isViolation = detectEnglishViolation(thinkingText, violationThreshold)
       if (isViolation) {
+        state.totalDetectionCount++
+        if (isViolation === 'trigger') {
+          state.triggerWordHitCount++
+        } else {
+          state.asciiRatioHitCount++
+        }
+
         const fingerprint = computeFingerprint(thinkingText)
         if (!state.notifiedFingerprints.includes(fingerprint)) {
           state.pendingViolationFingerprint = fingerprint
           state.lastCheckedTextLength = thinkingText.length
           state.updatedAt = Date.now()
+          saveThinkingValidatorState(state)
+        } else {
+          state.dedupSkipCount++
           saveThinkingValidatorState(state)
         }
       }
