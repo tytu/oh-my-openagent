@@ -34,6 +34,7 @@ import { PROMETHEUS_SYSTEM_PROMPT, PROMETHEUS_PERMISSION } from "../agents/prome
 import { DEFAULT_CATEGORIES } from "../tools/delegate-task/constants";
 import type { ModelCacheState } from "../plugin-state";
 import type { CategoryConfig } from "../config/schema";
+import { getAgentDisplayName } from "../shared/agent-display-names";
 
 export interface ConfigHandlerDeps {
   ctx: { directory: string; client?: any };
@@ -373,6 +374,13 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
         ...pluginAgents,
         ...configAgent,
       };
+    }
+
+    // 为内置 agent 设置中文显示名称（不覆盖用户自定义）
+    for (const key of ['sisyphus', 'atlas', 'prometheus', 'sisyphus-junior',
+      'oracle', 'librarian', 'explore', 'multimodal-looker', 'metis', 'momus']) {
+      const agent = (config.agent as Record<string, { name?: string }>)[key]
+      if (agent && !agent.name) agent.name = getAgentDisplayName(key)
     }
 
     const agentResult = config.agent as AgentConfig;
